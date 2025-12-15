@@ -441,7 +441,7 @@ impl Platform for NativePlatform {
         // Like android::call_manager::create_peer_connection
         let pc_observer = PeerConnectionObserver::new(
             connection.get_connection_ptr()?,
-            false, /* enable_frame_encryption */
+            true,  /* enable_frame_encryption */
             true,  /* enable_video_frame_event */
             true,  /* enable_video_frame_content */
         )?;

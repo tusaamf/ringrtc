@@ -34,6 +34,7 @@ use crate::{
         call::Call,
         call_mutex::CallMutex,
         connection_fsm::{ConnectionEvent, ConnectionStateMachine},
+        crypto as frame_crypto,
         platform::Platform,
         signaling,
         util::{ptr_as_box, redact_string},
@@ -400,6 +401,8 @@ where
     incoming_video_sink: Option<Box<dyn VideoSink>>,
     /// Tracks when to send `ConnectionObserverEvent::LowBandwidthForVideo`.
     bwe_callback_state: BweCallbackState,
+    /// Frame encryption context (must be outside of locks for WebRTC callbacks)
+    frame_crypto_context: Arc<CallMutex<frame_crypto::Context>>,
 }
 
 impl<T> fmt::Display for Connection<T>
@@ -485,6 +488,7 @@ where
             last_received_rtp_data_timestamp: Arc::clone(&self.last_received_rtp_data_timestamp),
             incoming_video_sink: self.incoming_video_sink.clone(),
             bwe_callback_state: self.bwe_callback_state,
+            frame_crypto_context: Arc::clone(&self.frame_crypto_context),
         }
     }
 }
@@ -573,6 +577,10 @@ where
             bwe_callback_state: BweCallbackState::CheckIfLow {
                 delayed_check_tick: 0,
             },
+            frame_crypto_context: Arc::new(CallMutex::new(
+                frame_crypto::Context::new(frame_crypto::random_secret(&mut OsRng)),
+                "frame_crypto_context",
+            )),
         };
 
         connection.init_connection_ptr()?;
@@ -2132,6 +2140,133 @@ impl Connection<crate::sim::sim_platform::SimPlatform> {
     }
 }
 
+impl<T> Connection<T>
+where
+    T: Platform,
+{
+    // Frame encryption buffer size calculations
+    const FRAME_ENCRYPTION_FOOTER_LEN: usize = 
+        std::mem::size_of::<frame_crypto::RatchetCounter>()
+        + std::mem::size_of::<u32>()  // FrameCounter
+        + std::mem::size_of::<frame_crypto::Mac>();
+
+    pub fn get_ciphertext_buffer_size(plaintext_size: usize) -> usize {
+        plaintext_size.saturating_add(Self::FRAME_ENCRYPTION_FOOTER_LEN)
+    }
+
+    pub fn get_plaintext_buffer_size(ciphertext_size: usize) -> usize {
+        ciphertext_size.saturating_sub(Self::FRAME_ENCRYPTION_FOOTER_LEN)
+    }
+
+    fn encrypt_media_impl(&self, plaintext: &[u8], ciphertext_buffer: &mut [u8]) -> Result<usize> {
+        let mut frame_crypto_context = self
+            .frame_crypto_context
+            .lock()
+            .expect("Get e2ee context to encrypt media");
+
+        Self::encrypt_internal(&mut frame_crypto_context, plaintext, ciphertext_buffer)
+    }
+
+    fn decrypt_media_impl(
+        &self,
+        remote_demux_id: DemuxId,
+        ciphertext: &[u8],
+        plaintext_buffer: &mut [u8],
+    ) -> Result<usize> {
+        let mut frame_crypto_context = self
+            .frame_crypto_context
+            .lock()
+            .expect("Get e2ee context to decrypt media");
+
+        Self::decrypt_internal(&mut frame_crypto_context, remote_demux_id, ciphertext, plaintext_buffer)
+    }
+
+    fn encrypt_internal(
+        frame_crypto_context: &mut frame_crypto::Context,
+        plaintext: &[u8],
+        ciphertext_buffer: &mut [u8],
+    ) -> Result<usize> {
+        let ciphertext_size = Self::get_ciphertext_buffer_size(plaintext.len());
+        
+        if ciphertext_buffer.len() < ciphertext_size {
+            return Err(RingRtcError::BufferTooSmall.into());
+        }
+
+        // Copy plaintext to ciphertext buffer
+        ciphertext_buffer[..plaintext.len()].copy_from_slice(plaintext);
+        let encrypted_payload = &mut ciphertext_buffer[..plaintext.len()];
+
+        // Encrypt the payload in place
+        let mut mac = frame_crypto::Mac::default();
+        let (ratchet_counter, frame_counter) =
+            frame_crypto_context.encrypt(encrypted_payload, &mut mac)?;
+        if frame_counter > u32::MAX as u64 {
+            return Err(RingRtcError::FrameCounterTooBig.into());
+        }
+
+        // Append footer: ratchet_counter (1 byte) + frame_counter (4 bytes) + mac (16 bytes)
+        let mut offset = plaintext.len();
+        ciphertext_buffer[offset] = ratchet_counter;
+        offset += 1;
+        
+        ciphertext_buffer[offset..offset + 4].copy_from_slice(&(frame_counter as u32).to_be_bytes());
+        offset += 4;
+        
+        ciphertext_buffer[offset..offset + std::mem::size_of::<frame_crypto::Mac>()].copy_from_slice(&mac);
+
+        Ok(ciphertext_size)
+    }
+
+    fn decrypt_internal(
+        frame_crypto_context: &mut frame_crypto::Context,
+        remote_demux_id: DemuxId,
+        ciphertext: &[u8],
+        plaintext_buffer: &mut [u8],
+    ) -> Result<usize> {
+        let mac_len = std::mem::size_of::<frame_crypto::Mac>();
+        
+        if ciphertext.len() < Self::FRAME_ENCRYPTION_FOOTER_LEN {
+            return Err(RingRtcError::BufferTooSmall.into());
+        }
+
+        // Read footer from the end: mac (16 bytes) + frame_counter (4 bytes) + ratchet_counter (1 byte)
+        let mac_offset = ciphertext.len() - mac_len;
+        let frame_counter_offset = mac_offset - 4;
+        let ratchet_counter_offset = frame_counter_offset - 1;
+
+        let ratchet_counter = ciphertext[ratchet_counter_offset];
+        let frame_counter = u32::from_be_bytes([
+            ciphertext[frame_counter_offset],
+            ciphertext[frame_counter_offset + 1],
+            ciphertext[frame_counter_offset + 2],
+            ciphertext[frame_counter_offset + 3],
+        ]);
+        
+        let mut mac = frame_crypto::Mac::default();
+        mac.copy_from_slice(&ciphertext[mac_offset..]);
+
+        let plaintext_len = ratchet_counter_offset;
+        
+        if plaintext_buffer.len() < plaintext_len {
+            return Err(RingRtcError::BufferTooSmall.into());
+        }
+
+        // Copy encrypted payload to plaintext buffer and decrypt in place
+        plaintext_buffer[..plaintext_len].copy_from_slice(&ciphertext[..plaintext_len]);
+        let encrypted_payload = &mut plaintext_buffer[..plaintext_len];
+
+        frame_crypto_context.decrypt(
+            remote_demux_id,
+            ratchet_counter,
+            frame_counter as u64,
+            encrypted_payload,
+            &mac,
+        )?;
+        
+        Ok(plaintext_len)
+    }
+}
+
 impl<T> PeerConnectionObserverTrait for Connection<T>
 where
     T: Platform,
@@ -2186,6 +2321,38 @@ where
             incoming_video_sink.on_video_frame(demux_id, video_frame)
         }
         Ok(())
+    }
+
+    // Frame encryption support
+    fn get_media_ciphertext_buffer_size(
+        &mut self,
+        _is_audio: bool,
+        plaintext_size: usize,
+    ) -> usize {
+        Self::get_ciphertext_buffer_size(plaintext_size)
+    }
+
+    fn encrypt_media(&mut self, plaintext: &[u8], ciphertext_buffer: &mut [u8]) -> Result<usize> {
+        self.encrypt_media_impl(plaintext, ciphertext_buffer)
+    }
+
+    fn get_media_plaintext_buffer_size(
+        &mut self,
+        _track_id: u32,
+        _is_audio: bool,
+        ciphertext_size: usize,
+    ) -> usize {
+        Self::get_plaintext_buffer_size(ciphertext_size)
+    }
+
+    fn decrypt_media(
+        &mut self,
+        track_id: u32,
+        ciphertext: &[u8],
+        plaintext_buffer: &mut [u8],
+    ) -> Result<usize> {
+        let remote_demux_id = track_id;
+        self.decrypt_media_impl(remote_demux_id, ciphertext, plaintext_buffer)
     }
 }
 

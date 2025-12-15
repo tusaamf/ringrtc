@@ -189,7 +189,7 @@ impl Platform for IosPlatform {
         // PeerConnection in Swift.
         let pc_observer = PeerConnectionObserver::new(
             connection_ptr,
-            false, /* enable_frame_encryption */
+            true,  /* enable_frame_encryption */
             false, /* enable_video_frame_event */
             false, /* enable_video_frame_content */
         )?;

@@ -44,6 +44,7 @@ use crate::{
         peer_connection::PeerConnection,
         peer_connection_factory::{self as pcf, PeerConnectionFactory},
         peer_connection_observer::PeerConnectionObserver,
+        peer_connection_observer::PeerConnectionObserverTrait,
     },
 };
 
@@ -114,7 +115,7 @@ pub fn create_peer_connection(
     // pass ownership of it to the PeerConnectionObserver.
     let pc_observer = PeerConnectionObserver::new(
         connection_ptr,
-        false, /* enable_frame_encryption */
+        true,  /* enable_frame_encryption */
         false, /* enable_video_frame_event */
         false, /* enable_video_frame_content */
     )?;

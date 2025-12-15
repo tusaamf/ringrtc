@@ -1,0 +1,27 @@
+# version: '3.8'
+# services:
+#   ringrtc:
+#     container_name: ringrtc
+#     # Ép buộc dùng kiến trúc Intel để tương thích với prebuilt binaries của Signal
+#     platform: linux/amd64
+#     build:
+#       context: .
+#       dockerfile: Dockerfile
+#     volumes:
+#       - ./:/build/ringrtc
+#     # Giữ container luôn chạy để bạn có thể remote vào
+#     command: tail -f /dev/null
+#     restart: unless-stopped
+
+name: ringrtc
+services:
+  ringrtc:
+    container_name: ringrtc
+    image: ringrtc:2.60.1
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - ./:/build/ringrtc
+    command: tail -f /dev/null

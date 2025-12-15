@@ -5085,7 +5085,10 @@ impl PeerConnectionObserverTrait for PeerConnectionObserverImpl {
     // See comment on FRAME_ENCRYPTION_FOOTER_LEN for more details on the format
     fn encrypt_media(&mut self, plaintext: &[u8], ciphertext_buffer: &mut [u8]) -> Result<usize> {
         if let Some(client) = &self.client {
-            client.encrypt_media(plaintext, ciphertext_buffer)
+            info!("ENCRYPT: Plaintext (len: {}): {:?}", plaintext.len(), &plaintext);
+            let result = client.encrypt_media(plaintext, ciphertext_buffer);
+            info!("ENCRYPT: Ciphertext (len: {}): {:?}", ciphertext_buffer.len(), &ciphertext_buffer);
+            result
         } else {
             warn!("Call isn't setup yet!  Can't encrypt.");
             Err(RingRtcError::FailedToEncrypt.into())
@@ -5109,8 +5112,11 @@ impl PeerConnectionObserverTrait for PeerConnectionObserverImpl {
         plaintext_buffer: &mut [u8],
     ) -> Result<usize> {
         if let Some(client) = &self.client {
+            info!("DECRYPT: Ciphertext (len: {}): {:?}", ciphertext.len(), &ciphertext);
             let remote_demux_id = track_id;
-            client.decrypt_media(remote_demux_id, ciphertext, plaintext_buffer)
+            let result = client.decrypt_media(remote_demux_id, ciphertext, plaintext_buffer);
+            info!("DECRYPT: Plaintext (len: {}): {:?}", plaintext_buffer.len(), &plaintext_buffer);
+            result
         } else {
             warn!("Call isn't setup yet!  Can't decrypt");
             Err(RingRtcError::FailedToDecrypt.into())
