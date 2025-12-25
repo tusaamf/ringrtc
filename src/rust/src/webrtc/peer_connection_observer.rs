@@ -474,6 +474,8 @@ extern "C" fn pc_observer_EncryptMedia<T>(
 where
     T: PeerConnectionObserverTrait,
 {
+    info!("pc_observer_EncryptMedia(): called for track_id: {:?}", plaintext);
+
     if plaintext.is_null() || ciphertext_out.is_null() || ciphertext_size_out.is_null() {
         error!("nulls passed into pc_observer_EncryptMedia");
         return false;
@@ -541,6 +543,8 @@ extern "C" fn pc_observer_DecryptMedia<T>(
 where
     T: PeerConnectionObserverTrait,
 {
+    info!("pc_observer_DecryptMedia(): called for track_id: {:?}", ciphertext);
+
     if ciphertext.is_null() || plaintext_out.is_null() || plaintext_size_out.is_null() {
         return false;
     }
@@ -709,7 +713,36 @@ where
         }
     }
 
+    pub fn rffi(&self) -> &webrtc::ptr::Unique<RffiPeerConnectionObserver> {
+        &self.rffi
+    }
+
     pub fn into_rffi(mut self) -> webrtc::ptr::Unique<RffiPeerConnectionObserver> {
         self.rffi.take()
+    }
+
+    // pub fn set_frame_encryptor_on_sender(
+    //     &self,
+    //     sender_ptr: usize,
+    // ) {
+    //     unsafe {
+    //         pc_observer::Rust_setFrameEncryptorOnSender(
+    //             self.into_rffi().into_owned(),
+    //             // webrtc::ptr::Owned::from_ptr(observer.borrow().as_ptr()),
+    //             sender_ptr as *mut std::ffi::c_void,
+    //         );
+    //     }
+    // }
+}
+
+pub fn set_frame_encryptor_on_sender(
+    observer: webrtc::ptr::Borrowed<RffiPeerConnectionObserver>,
+    sender_ptr: usize,
+) {
+    unsafe {
+        pc_observer::Rust_setFrameEncryptorOnSender(
+            observer,
+            sender_ptr as *mut std::ffi::c_void,
+        );
     }
 }

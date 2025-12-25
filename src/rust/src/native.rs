@@ -458,6 +458,7 @@ impl Platform for NativePlatform {
             &context.ice_servers,
             context.outgoing_audio_track.clone(),
             Some(context.outgoing_video_track.clone()),
+            0
         )?;
 
         connection.set_peer_connection(pc)?;

@@ -29,6 +29,7 @@ public class Connection extends PeerConnection {
   @NonNull
   private        final CallId        callId;
   private              long          nativePeerConnection;
+  private              long          nativeAudioSender;
   private              int           remoteDevice;
   @Nullable
   private              AudioSource   audioSource;
@@ -61,6 +62,15 @@ public class Connection extends PeerConnection {
     this.audioSource   = audioSource;
     this.audioTrack    = audioTrack;
 
+  }
+
+  void setNativeAudioSender(long nativeAudioSender) {
+    this.nativeAudioSender = nativeAudioSender;
+  }
+
+  @CalledByNative
+  long getNativeAudioSender() {
+    return nativeAudioSender;
   }
 
   void setAudioEnabled(boolean enabled) {

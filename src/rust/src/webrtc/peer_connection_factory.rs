@@ -193,6 +193,25 @@ impl Default for AudioConfig {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct McuConfig {
+    pub baudrate: u8,
+    pub sleep_us: u64,
+    pub retry_quota: u8,
+    pub spidev_path: String,
+}
+
+impl Default for McuConfig {
+    fn default() -> Self {
+        Self {
+            baudrate: 1,
+            sleep_us: 1500,
+            retry_quota: 10,
+            spidev_path: "/dev/spidev0.0".to_string(),
+        }
+    }
+}
+
 // An observer trait that receives notifications whenever the input or output
 // devices change.
 // These callbacks should run "quickly", as they'll be run from the cubeb worker
@@ -418,6 +437,7 @@ impl PeerConnectionFactory {
         ice_servers: &[IceServer],
         outgoing_audio_track: AudioTrack,
         outgoing_video_track: Option<VideoTrack>,
+        local_demux_id: u32,
     ) -> Result<PeerConnection> {
         debug!(
             "PeerConnectionFactory::create_peer_connection() {:?}",
@@ -450,6 +470,7 @@ impl PeerConnectionFactory {
                     .map_or_else(webrtc::ptr::BorrowedRc::null, |outgoing_video_track| {
                         outgoing_video_track.rffi().as_borrowed()
                     }),
+                local_demux_id,
             )
         });
         debug!(

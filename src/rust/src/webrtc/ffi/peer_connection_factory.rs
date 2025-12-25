@@ -63,6 +63,7 @@ unsafe extern "C" {
         ice_servers: webrtc::ptr::Borrowed<RffiIceServers>,
         outgoing_audio_track: webrtc::ptr::BorrowedRc<RffiAudioTrack>,
         outgoing_video_track: webrtc::ptr::BorrowedRc<RffiVideoTrack>,
+        local_demux_id: u32,
     ) -> webrtc::ptr::OwnedRc<RffiPeerConnection>;
     pub fn Rust_createAudioTrack(
         factory: webrtc::ptr::BorrowedRc<RffiPeerConnectionFactoryOwner>,

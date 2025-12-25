@@ -28,6 +28,8 @@ const MAX_OOO_FRAMES: u64 = 30 * 10;
 /// Maximum number of out of order ratchets to keep old ratchet keys for.
 const MAX_OOO_RATCHETS: u8 = 5;
 pub const MAC_SIZE_BYTES: usize = 16;
+// VMC - TUNT
+pub const E164_SIZE_BYTES: usize = 12;
 
 // For some reason the linter doesn't detect this is required in the static assertions.
 #[allow(dead_code)]
@@ -43,6 +45,8 @@ pub type RatchetCounter = u8;
 pub type SenderId = u32;
 pub type FrameCounter = u64;
 pub type Mac = [u8; MAC_SIZE_BYTES];
+// VMC - TUNT
+pub type E164 = [u8; E164_SIZE_BYTES];
 
 pub fn random_secret<R: Rng + CryptoRng + ?Sized>(rng: &mut R) -> Secret {
     let mut secret = Secret::default();

@@ -240,21 +240,24 @@ impl SessionDescription {
     pub fn offer_from_v4(
         v4: &protobuf::signaling::ConnectionParametersV4,
         call_config: &CallConfig,
+        local_demux_id: u32,
     ) -> Result<Self> {
-        Self::from_v4(true, v4, call_config)
+        Self::from_v4(true, v4, call_config, local_demux_id)
     }
 
     pub fn answer_from_v4(
         v4: &protobuf::signaling::ConnectionParametersV4,
         call_config: &CallConfig,
+        local_demux_id: u32,
     ) -> Result<Self> {
-        Self::from_v4(false, v4, call_config)
+        Self::from_v4(false, v4, call_config, local_demux_id)
     }
 
     fn from_v4(
         offer: bool,
         v4: &protobuf::signaling::ConnectionParametersV4,
         call_config: &CallConfig,
+        local_demux_id: u32,
     ) -> Result<Self> {
         let rffi_ice_ufrag = to_cstring(&v4.ice_ufrag)?;
         let rffi_ice_pwd = to_cstring(&v4.ice_pwd)?;
@@ -286,6 +289,7 @@ impl SessionDescription {
             sdp::Rust_sessionDescriptionFromV4(
                 offer,
                 webrtc::ptr::Borrowed::from_ptr(&rffi_v4),
+                local_demux_id,
                 call_config.enable_tcc_audio,
                 call_config.enable_vp9,
             )

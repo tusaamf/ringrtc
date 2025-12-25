@@ -57,6 +57,7 @@ pub unsafe fn Rust_createPeerConnection(
     _ice_servers: webrtc::ptr::Borrowed<RffiIceServers>,
     _outgoing_audio_track: webrtc::ptr::BorrowedRc<RffiAudioTrack>,
     _outgoing_video_track: webrtc::ptr::BorrowedRc<RffiVideoTrack>,
+    _local_demux_id: u32,
 ) -> webrtc::ptr::OwnedRc<RffiPeerConnection> {
     info!("Rust_createPeerConnection()");
     unsafe { webrtc::ptr::OwnedRc::from_ptr(Box::leak(Box::new(RffiPeerConnection::new()))) }

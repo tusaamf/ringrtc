@@ -1310,6 +1310,7 @@ impl Client {
                         &ice_servers,
                         outgoing_audio_track,
                         outgoing_video_track,
+                        0
                     )
                     .inspect_err(|_| {
                         observer.handle_ended(

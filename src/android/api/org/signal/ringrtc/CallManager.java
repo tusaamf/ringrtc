@@ -25,6 +25,7 @@ import org.webrtc.MediaConstraints;
 import org.webrtc.MediaStream;
 import org.webrtc.NativeLibraryLoader;
 import org.webrtc.PeerConnection;
+import org.webrtc.RtpSender;
 import org.webrtc.PeerConnectionFactory;
 import org.webrtc.VideoDecoderFactory;
 import org.webrtc.VideoEncoderFactory;
@@ -1369,7 +1370,8 @@ public class CallManager {
       AudioTrack  audioTrack  = factory.createAudioTrack("audio1", audioSource);
       audioTrack.setEnabled(false);
 
-      connection.addTrack(audioTrack, Collections.singletonList("s"));
+      RtpSender audioSender = connection.addTrack(audioTrack, Collections.singletonList("s"));
+      connection.setNativeAudioSender(audioSender.getNativeRtpSender());
       if (callContext.videoTrack != null) {
         connection.addTrack(callContext.videoTrack, Collections.singletonList("s"));
       }

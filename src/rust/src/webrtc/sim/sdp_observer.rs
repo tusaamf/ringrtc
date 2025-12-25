@@ -139,6 +139,7 @@ pub unsafe fn Rust_deleteV4(_v4: webrtc::ptr::Owned<RffiConnectionParametersV4>)
 pub unsafe fn Rust_sessionDescriptionFromV4(
     offer: bool,
     _v4: webrtc::ptr::Borrowed<RffiConnectionParametersV4>,
+    _local_demux_id: u32,
     _enable_tcc_audio: bool,
     _enable_vp9: bool,
 ) -> webrtc::ptr::Owned<RffiSessionDescription> {

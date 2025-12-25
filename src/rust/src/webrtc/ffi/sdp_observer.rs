@@ -87,6 +87,7 @@ unsafe extern "C" {
     pub fn Rust_sessionDescriptionFromV4(
         offer: bool,
         v4: webrtc::ptr::Borrowed<RffiConnectionParametersV4>,
+        local_demux_id: u32,
         enable_tcc_audio: bool,
         enable_vp9: bool,
     ) -> webrtc::ptr::Owned<RffiSessionDescription>;

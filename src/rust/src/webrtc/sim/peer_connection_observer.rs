@@ -34,3 +34,11 @@ pub unsafe fn Rust_deletePeerConnectionObserver(
 ) {
     info!("Rust_deletePeerConnectionObserver():");
 }
+
+#[allow(non_snake_case, clippy::missing_safety_doc)]
+pub unsafe fn Rust_setFrameEncryptorOnSender(
+    _observer: webrtc::ptr::Owned<RffiPeerConnectionObserver>,
+    _sender: *mut std::ffi::c_void,
+) {
+    info!("Rust_setFrameEncryptorOnSender():");
+}

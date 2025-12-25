@@ -408,4 +408,36 @@ impl PeerConnection {
     pub fn close(&self) {
         unsafe { pc::Rust_closePeerConnection(self.rffi.as_borrowed()) };
     }
+
+    // pub fn set_frame_encryptor_on_sender(&self, sender_ptr: usize) {
+    //     let peer_connection = self.rffi.as_borrowed();
+    //     warn!("TUNT set_frame_encryptor_on_sender: peer_connection: {:?}", peer_connection);
+    //     // unsafe { pc::Rust_setFrameEncryptorOnSender(peer_connection, sender_ptr) };
+    //     // if let Some(observer) = &self._rffi_pc_observer {
+    //     //     crate::webrtc::peer_connection_observer::set_frame_encryptor_on_sender(
+    //     //         observer,
+    //     //         sender_ptr,
+    //     //     );
+    //     // } else {
+    //     //     warn!("TUNT set_frame_encryptor_on_sender: _rffi_pc_observer is None. Frame encryptor NOT set.");
+    //     // }
+    // }
+    pub fn set_frame_encryptor_on_sender(&self, sender_ptr: usize, raw_observer_ptr: usize) {
+        let observer = if let Some(observer) = &self._rffi_pc_observer {
+            observer.borrow()
+        } else if raw_observer_ptr != 0 {
+            // This is unsafe because we are trusting the raw pointer is valid.
+            // On Android, the observer's lifetime is managed by the C++/Java layer
+            // and should be valid for the duration of the PeerConnection.
+            // unsafe {
+                
+            // }
+            webrtc::ptr::Borrowed::from_ptr(raw_observer_ptr as *const RffiPeerConnectionObserver)
+        } else {
+            warn!("set_frame_encryptor_on_sender: observer is None. Frame encryptor NOT set.");
+            return;
+        };
+
+        crate::webrtc::peer_connection_observer::set_frame_encryptor_on_sender(observer, sender_ptr);
+    }
 }

@@ -31,6 +31,11 @@ pub mod lite {
     pub mod sfu;
 }
 
+/// Send/receive encypted media through an MCU.
+pub mod mcu {
+    pub mod connection_spidev;
+}
+
 /// Core, platform independent functionality.
 pub mod core {
     pub mod call;

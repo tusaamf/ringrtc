@@ -163,4 +163,9 @@ unsafe extern "C" {
     );
 
     pub fn Rust_closePeerConnection(peer_connection: webrtc::ptr::BorrowedRc<RffiPeerConnection>);
+
+    // pub fn Rust_setFrameEncryptorOnSender(
+    //     peer_connection: webrtc::ptr::BorrowedRc<RffiPeerConnection>,
+    //     sender_ptr: usize,
+    // );
 }

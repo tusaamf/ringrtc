@@ -34,4 +34,9 @@ unsafe extern "C" {
     pub fn Rust_deletePeerConnectionObserver(
         observer: webrtc::ptr::Owned<RffiPeerConnectionObserver>,
     );
+
+    pub fn Rust_setFrameEncryptorOnSender(
+        observer: webrtc::ptr::Borrowed<RffiPeerConnectionObserver>,
+        sender: *mut std::ffi::c_void,
+    );
 }

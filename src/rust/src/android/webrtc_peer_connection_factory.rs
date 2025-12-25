@@ -23,7 +23,8 @@ unsafe extern "C" {
         rtcConfig: JObject,
         constraints: JObject,
         nativeObserver: jlong,
-        sslCertificateVerifier: JObject,
+        stream_ids: JObject,
+        // local_demux_id: u32,
     ) -> jlong;
 }
 

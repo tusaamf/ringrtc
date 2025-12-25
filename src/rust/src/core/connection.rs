@@ -29,8 +29,7 @@ use crate::{
         Result, RingBench,
         actor::{Actor, Stopper},
         units::DataRate,
-    },
-    core::{
+    }, core::{
         call::Call,
         call_mutex::CallMutex,
         connection_fsm::{ConnectionEvent, ConnectionStateMachine},
@@ -38,11 +37,10 @@ use crate::{
         platform::Platform,
         signaling,
         util::{ptr_as_box, redact_string},
-    },
-    error::RingRtcError,
-    lite::sfu::DemuxId,
-    protobuf,
-    webrtc::{
+    }, mcu::{
+        connection_spidev::ConnectionSpidev,
+        connection_spidev::TypeMess, 
+    }, error::RingRtcError, lite::sfu::DemuxId, protobuf, webrtc::{
         self,
         ice_gatherer::IceGatherer,
         media::{MediaStream, VideoFrame, VideoFrameMetadata, VideoSink},
@@ -57,7 +55,7 @@ use crate::{
             SessionDescription, SrtpCryptoSuite, SrtpKey, create_csd_observer, create_ssd_observer,
         },
         stats_observer::{StatsObserver, StatsSnapshotConsumer, create_stats_observer},
-    },
+    }
 };
 
 /// Used to generate stats, to retransmit RTP messages, and to get audio levels.
@@ -158,6 +156,9 @@ where
     rtp_observer_ptr: Option<webrtc::ptr::Unique<RffiRtpObserver>>,
     /// Application-specific incoming media
     incoming_media: Option<<T as Platform>::AppIncomingMedia>,
+    /// Raw pointer to the C++ PeerConnectionObserver.
+    /// This is only used on Android, where the observer is owned by C++.
+    raw_pc_observer_ptr: usize,
     /// Application specific peer connection
     app_connection: Option<<T as Platform>::AppConnection>,
     /// Boxed copy of the stats collector object shared for callbacks.
@@ -373,6 +374,8 @@ where
     /// The call direction, inbound or outbound.
     direction: CallDirection,
     /// The current state of the call connection
+    // TUNT, add set_stream_ids like group call
+    local_demux_id: DemuxId,
     state: Arc<CallMutex<ConnectionState>>,
     /// Ancillary WebRTC data.
     webrtc: Arc<CallMutex<WebRtcData<T>>>,
@@ -476,6 +479,8 @@ where
             direction: self.direction,
             state: Arc::clone(&self.state),
             webrtc: Arc::clone(&self.webrtc),
+            // TUNT, add set_stream_ids like group call
+            local_demux_id: self.local_demux_id,
             bandwidth_controller: Arc::clone(&self.bandwidth_controller),
             call_config: self.call_config.clone(),
             audio_levels_interval: self.audio_levels_interval,
@@ -499,6 +504,8 @@ where
 {
     /// Create a new Connection.
     pub fn new(
+        // TUNT, add set_stream_ids like group call
+        local_demux_id: DemuxId,
         call: Call<T>,
         remote_device: DeviceId,
         connection_type: ConnectionType,
@@ -518,6 +525,7 @@ where
             connection_ptr: None,
             rtp_observer_ptr: None,
             incoming_media: None,
+            raw_pc_observer_ptr: 0,
             app_connection: None,
             stats_observer: None,
         };
@@ -534,6 +542,8 @@ where
             connection_id: ConnectionId::new(call_id, remote_device),
             direction,
             call: Arc::new(CallMutex::new(call, "call")),
+            // TUNT, add set_stream_ids like group call
+            local_demux_id,
             state: Arc::new(CallMutex::new(ConnectionState::NotYetStarted, "state")),
             webrtc: Arc::new(CallMutex::new(webrtc, "webrtc")),
             bandwidth_controller: Arc::new(CallMutex::new(
@@ -722,8 +732,8 @@ where
                 // Set the remote max based on the bitrate in the answer.
                 bandwidth_controller.remote_max = v4_answer.max_bitrate_bps.map(DataRate::from_bps);
 
-                let offer = SessionDescription::offer_from_v4(&v4_offer, &self.call_config)?;
-                let answer = SessionDescription::answer_from_v4(&v4_answer, &self.call_config)?;
+                let offer = SessionDescription::offer_from_v4(&v4_offer, &self.call_config, self.local_demux_id)?;
+                let answer = SessionDescription::answer_from_v4(&v4_answer, &self.call_config, self.local_demux_id)?;
 
                 info!(
                     "Incoming answer codecs: {:?}, max_bitrate: {:?}, bandwidth_controller: {:?}",
@@ -747,8 +757,19 @@ where
                     caller_identity_key,
                     callee_identity_key,
                 )?;
+                info!("start_outgoing_child(): SRTP keys negotiated. Disabling DTLS.");
+                
+                // Re-initialize the crypto context with the negotiated keys.
+                {
+                    let mut frame_crypto_context = self.frame_crypto_context.lock().expect("Get e2ee context to set keys");
+                    frame_crypto_context.reset_send_ratchet(offer_key.key.clone().try_into().map_err(|_| RingRtcError::SrtpKeyNegotiationFailure)?);
+                    frame_crypto_context.add_receive_secret(self.remote_device_id(), 0, answer_key.key.clone().try_into().map_err(|_| RingRtcError::SrtpKeyNegotiationFailure)?);
+                }
+
                 offer.disable_dtls_and_set_srtp_key(&offer_key)?;
                 answer.disable_dtls_and_set_srtp_key(&answer_key)?;
+            } else {
+                warn!("start_outgoing_child(): No remote public key in offer. DTLS will be used.");
             }
 
             let observer = create_ssd_observer();
@@ -820,7 +841,8 @@ where
                     v4_offer.receive_video_codecs, v4_offer.max_bitrate_bps, bandwidth_controller
                 );
 
-                let offer = SessionDescription::offer_from_v4(v4_offer, &self.call_config)?;
+                let offer =
+                    SessionDescription::offer_from_v4(v4_offer, &self.call_config, self.local_demux_id)?;
 
                 (offer, v4_offer.public_key.clone())
             } else {
@@ -829,7 +851,10 @@ where
 
             let (local_secret, local_public_key) = generate_local_secret_and_public_key()?;
             let answer_key = match remote_public_key {
-                None => None,
+                None => {
+                    warn!("start_incoming(): No remote public key in offer. DTLS will be used.");
+                    None
+                },
                 Some(remote_public_key) => {
                     let caller_identity_key = &received.sender_identity_key;
                     let callee_identity_key = &received.receiver_identity_key;
@@ -842,6 +867,7 @@ where
                         caller_identity_key,
                         callee_identity_key,
                     )?;
+                    info!("start_incoming(): SRTP keys negotiated. Disabling DTLS.");
                     offer.disable_dtls_and_set_srtp_key(&offer_key)?;
                     Some(answer_key)
                 }
@@ -873,7 +899,7 @@ where
                 );
 
                 // We have to change the local answer to match what we send back
-                answer = SessionDescription::answer_from_v4(&v4_answer, &self.call_config)?;
+                answer = SessionDescription::answer_from_v4(&v4_answer, &self.call_config, self.local_demux_id)?;
                 // And we have to make sure to do this again since answer_from_v4 doesn't do it.
                 if let Some(answer_key) = &answer_key {
                     answer.disable_dtls_and_set_srtp_key(answer_key)?;
@@ -932,6 +958,12 @@ where
 
     pub fn remote_device_id(&self) -> DeviceId {
         self.connection_id.remote_device_id()
+    }
+
+    // TUNT, add set_stream_ids like group call
+    /// Return the local demux id associated with this call.
+    pub fn local_demux_id(&self) -> DemuxId {
+        self.local_demux_id
     }
 
     /// Return the connection identifier.
@@ -999,6 +1031,19 @@ where
         let mut webrtc = self.webrtc.lock()?;
         webrtc.rtp_observer_ptr = Some(rtp_observer_ptr);
         webrtc.peer_connection = Some(peer_connection);
+        Ok(())
+    }
+
+    pub fn set_frame_encryptor_on_sender(&self, sender_ptr: usize) -> Result<()> {
+        let webrtc = self.webrtc.lock()?;
+        if let Some(pc) = &webrtc.peer_connection {
+            pc.set_frame_encryptor_on_sender(sender_ptr, webrtc.raw_pc_observer_ptr);
+        }
+        Ok(())
+    }
+
+    pub fn set_raw_pc_observer_ptr(&self, ptr: usize) -> Result<()> {
+        self.webrtc.lock()?.raw_pc_observer_ptr = ptr;
         Ok(())
     }
 
@@ -2144,126 +2189,115 @@ impl<T> Connection<T>
 where
     T: Platform,
 {
-    // Frame encryption buffer size calculations
-    const FRAME_ENCRYPTION_FOOTER_LEN: usize = 
-        std::mem::size_of::<frame_crypto::RatchetCounter>()
-        + std::mem::size_of::<u32>()  // FrameCounter
-        + std::mem::size_of::<frame_crypto::Mac>();
+    // // The format for the ciphertext is:
+    // // N bytes of encrypted media (the rest of the given plaintext_size)
+    // // 1 byte RatchetCounter
+    // // 4 byte FrameCounter
+    // // 16 byte MAC
+    // //
+    // // Here is the justification for a 4 byte FrameCounter:
+    // // - With 30fps video with 3 layers:
+    // //   - an 8min call will require 17 bits
+    // //   - a 35hr call will require 25 bits
+    // //   - a 1yr call will require 33 bits
+    // // - So for most calls we need 3 bytes and for a small number of calls we need 4 bytes.
+    // // - We could use a varint mechanism to choose between 3 and 4 bytes, but that's not really
+    // //   worth the extra complexity.
+    // const FRAME_ENCRYPTION_FOOTER_LEN: usize = size_of::<frame_crypto::RatchetCounter>()
+    //     + size_of::<u32>()
+    //     + size_of::<frame_crypto::Mac>();
 
-    pub fn get_ciphertext_buffer_size(plaintext_size: usize) -> usize {
-        plaintext_size.saturating_add(Self::FRAME_ENCRYPTION_FOOTER_LEN)
+    const FRAME_ENCRYPTION_HEADER_LEN: usize = size_of::<frame_crypto::E164>();
+
+    // Called by WebRTC through PeerConnectionObserver
+    // See comment on FRAME_ENCRYPTION_FOOTER_LEN for more details on the format
+    fn get_ciphertext_buffer_size(plaintext_size: usize) -> usize {
+        // If we get asked to encrypt a message of size greater than (usize::MAX - FRAME_ENCRYPTION_FOOTER_LEN),
+        // we'd fail to write the footer in encrypt_media and the frame would be dropped.
+        plaintext_size.saturating_add(Self::FRAME_ENCRYPTION_HEADER_LEN)
     }
 
     pub fn get_plaintext_buffer_size(ciphertext_size: usize) -> usize {
-        ciphertext_size.saturating_sub(Self::FRAME_ENCRYPTION_FOOTER_LEN)
+        ciphertext_size.saturating_sub(Self::FRAME_ENCRYPTION_HEADER_LEN)
     }
 
     fn encrypt_media_impl(&self, plaintext: &[u8], ciphertext_buffer: &mut [u8]) -> Result<usize> {
-        let mut frame_crypto_context = self
-            .frame_crypto_context
-            .lock()
-            .expect("Get e2ee context to encrypt media");
-
-        Self::encrypt_internal(&mut frame_crypto_context, plaintext, ciphertext_buffer)
-    }
-
-    fn decrypt_media_impl(
-        &self,
-        remote_demux_id: DemuxId,
-        ciphertext: &[u8],
-        plaintext_buffer: &mut [u8],
-    ) -> Result<usize> {
-        let mut frame_crypto_context = self
-            .frame_crypto_context
-            .lock()
-            .expect("Get e2ee context to decrypt media");
-
-        Self::decrypt_internal(&mut frame_crypto_context, remote_demux_id, ciphertext, plaintext_buffer)
-    }
-
-    fn encrypt_internal(
-        frame_crypto_context: &mut frame_crypto::Context,
-        plaintext: &[u8],
-        ciphertext_buffer: &mut [u8],
-    ) -> Result<usize> {
         let ciphertext_size = Self::get_ciphertext_buffer_size(plaintext.len());
-        
-        if ciphertext_buffer.len() < ciphertext_size {
-            return Err(RingRtcError::BufferTooSmall.into());
-        }
+        let mut ciphertext = Writer::new(ciphertext_buffer);
 
-        // Copy plaintext to ciphertext buffer
-        ciphertext_buffer[..plaintext.len()].copy_from_slice(plaintext);
-        let encrypted_payload = &mut ciphertext_buffer[..plaintext.len()];
+        // Thử 1 số điện thoại mặc định
+        let e164: frame_crypto::E164 = *b"+84984999999";
+        ciphertext.write_slice(&e164)?;
+        let encrypted_payload = ciphertext.write_slice(plaintext)?;
 
-        // Encrypt the payload in place
-        let mut mac = frame_crypto::Mac::default();
-        let (ratchet_counter, frame_counter) =
-            frame_crypto_context.encrypt(encrypted_payload, &mut mac)?;
-        if frame_counter > u32::MAX as u64 {
-            return Err(RingRtcError::FrameCounterTooBig.into());
-        }
+        // gửi borrowed của encrypted_payload đi để encrypt với MCU
 
-        // Append footer: ratchet_counter (1 byte) + frame_counter (4 bytes) + mac (16 bytes)
-        let mut offset = plaintext.len();
-        ciphertext_buffer[offset] = ratchet_counter;
-        offset += 1;
-        
-        ciphertext_buffer[offset..offset + 4].copy_from_slice(&(frame_counter as u32).to_be_bytes());
-        offset += 4;
-        
-        ciphertext_buffer[offset..offset + std::mem::size_of::<frame_crypto::Mac>()].copy_from_slice(&mac);
+        // Log dữ liệu plaintext_buffer
+        let formatted_string = format!("{:?}", ciphertext_buffer);
+        debug!(
+            "encrypt_media_impl (DEBUG): ciphertext_size: {} data: {}",
+            ciphertext_size,
+            formatted_string
+        );
 
         Ok(ciphertext_size)
     }
 
-    fn decrypt_internal(
-        frame_crypto_context: &mut frame_crypto::Context,
-        remote_demux_id: DemuxId,
+    fn decrypt_media_impl(
+        &self,
         ciphertext: &[u8],
         plaintext_buffer: &mut [u8],
     ) -> Result<usize> {
-        let mac_len = std::mem::size_of::<frame_crypto::Mac>();
+        // Tạm thời chỉ sao chép dữ liệu để kiểm tra, không giải mã
+        let mut ciphertext = Reader::new(ciphertext);
+        let mut plaintext = Writer::new(plaintext_buffer);
         
-        if ciphertext.len() < Self::FRAME_ENCRYPTION_FOOTER_LEN {
-            return Err(RingRtcError::BufferTooSmall.into());
-        }
+        let e164: frame_crypto::E164 = ciphertext
+            .read_slice_from_start(size_of::<frame_crypto::E164>())?
+            .try_into()?;
 
-        // Read footer from the end: mac (16 bytes) + frame_counter (4 bytes) + ratchet_counter (1 byte)
-        let mac_offset = ciphertext.len() - mac_len;
-        let frame_counter_offset = mac_offset - 4;
-        let ratchet_counter_offset = frame_counter_offset - 1;
+        // Allow for in-place decryption from ciphertext to plaintext_buffer by using
+        // the write_slice that supports overlapping copies.
+        let encrypted_payload = plaintext.write_slice_overlapping(ciphertext.remaining())?;
 
-        let ratchet_counter = ciphertext[ratchet_counter_offset];
-        let frame_counter = u32::from_be_bytes([
-            ciphertext[frame_counter_offset],
-            ciphertext[frame_counter_offset + 1],
-            ciphertext[frame_counter_offset + 2],
-            ciphertext[frame_counter_offset + 3],
-        ]);
-        
-        let mut mac = frame_crypto::Mac::default();
-        mac.copy_from_slice(&ciphertext[mac_offset..]);
+        // gửi borrowed của encrypted_payload đi để decrypt với MCU
+        // TODO: gọi connection_spidev ở đây 
+        // (1) create_mcu_frame_message với encypted_payload
+        // (2) send_message_to_mcu với message đã tạo từ (1) và replaced vào encrypted_payload
 
-        let plaintext_len = ratchet_counter_offset;
-        
-        if plaintext_buffer.len() < plaintext_len {
-            return Err(RingRtcError::BufferTooSmall.into());
-        }
+        let mess_type = if self.direction() == CallDirection::Outgoing {
+            TypeMess::CallerDecrypt
+        } else {
+            TypeMess::CalleeDecrypt
+        };
 
-        // Copy encrypted payload to plaintext buffer and decrypt in place
-        plaintext_buffer[..plaintext_len].copy_from_slice(&ciphertext[..plaintext_len]);
-        let encrypted_payload = &mut plaintext_buffer[..plaintext_len];
+        let spidev_conn = ConnectionSpidev::new(10, 100, 3, "/dev/spidev0.0");
+        // let mcu_message = spidev_conn.create_mcu_frame_message(mess_type, encrypted_payload)?;
+        // let mcu_response = spidev_conn.send_message_to_mcu(mcu_message)?;
 
-        frame_crypto_context.decrypt(
-            remote_demux_id,
-            ratchet_counter,
-            frame_counter as u64,
-            encrypted_payload,
-            &mac,
-        )?;
-        
-        Ok(plaintext_len)
+        // if mcu_response.get(0) != Some(&MCU_FIRST_FRAME_DATA) {
+        //     return Err(
+        //         RingRtcError::Other("Invalid MCU response frame for decrypt".to_string()).into(),
+        //     );
+        // }
+        // let payload_len = u16::from_be_bytes(mcu_response[3..5].try_into()?) as usize;
+        // let decrypted_data = &mcu_response[8..8 + payload_len];
+
+        // if encrypted_payload.len() < decrypted_data.len() {
+        //     return Err(RingRtcError::BufferTooSmall.into());
+        // }
+        // encrypted_payload[..decrypted_data.len()].copy_from_slice(decrypted_data);
+
+        // Log dữ liệu plaintext_buffer
+        let formatted_string = format!("{:?}", encrypted_payload);
+        debug!(
+            "decrypt_media_impl (DEBUG): e164:{:?}, plaintext_size: {} data: {}",
+            e164,
+            encrypted_payload.len(),
+            formatted_string
+        );
+
+        Ok(encrypted_payload.len())
     }
 }
 
@@ -2347,12 +2381,12 @@ where
 
     fn decrypt_media(
         &mut self,
-        track_id: u32,
+        _track_id: u32,
         ciphertext: &[u8],
         plaintext_buffer: &mut [u8],
     ) -> Result<usize> {
-        let remote_demux_id = track_id;
-        self.decrypt_media_impl(remote_demux_id, ciphertext, plaintext_buffer)
+        // let remote_demux_id = track_id;
+        self.decrypt_media_impl(ciphertext, plaintext_buffer)
     }
 }
 
@@ -2394,6 +2428,111 @@ where
     }
 }
 
+// Should this go in some util class?
+struct Writer<'buf> {
+    buf: &'buf mut [u8],
+    offset: usize,
+}
+
+impl<'buf> Writer<'buf> {
+    fn new(buf: &'buf mut [u8]) -> Self {
+        Self { buf, offset: 0 }
+    }
+
+    fn remaining_len(&self) -> usize {
+        self.buf.len() - self.offset
+    }
+
+    fn write_u8(&mut self, input: u8) -> Result<()> {
+        if self.remaining_len() < 1 {
+            return Err(RingRtcError::BufferTooSmall.into());
+        }
+        self.buf[self.offset] = input;
+        self.offset += 1;
+        Ok(())
+    }
+
+    fn write_u32(&mut self, input: u32) -> Result<()> {
+        self.write_slice(&input.to_be_bytes())?;
+        Ok(())
+    }
+
+    fn write_slice(&mut self, input: &[u8]) -> Result<&mut [u8]> {
+        if self.remaining_len() < input.len() {
+            return Err(RingRtcError::BufferTooSmall.into());
+        }
+        let start = self.offset;
+        let end = start + input.len();
+        let output = &mut self.buf[start..end];
+        output.copy_from_slice(input);
+        self.offset = end;
+        Ok(output)
+    }
+
+    fn write_slice_overlapping(&mut self, input: &[u8]) -> Result<&mut [u8]> {
+        if self.remaining_len() < input.len() {
+            return Err(RingRtcError::BufferTooSmall.into());
+        }
+        let start = self.offset;
+        let end = start + input.len();
+        let output = &mut self.buf[start..end];
+
+        // Use memmove to handle potentially overlapping memory. This is safe
+        // because we've already checked the buffer lengths.
+        unsafe {
+            std::ptr::copy(input.as_ptr(), output.as_mut_ptr(), input.len());
+        }
+
+        self.offset = end;
+        Ok(output)
+    }
+}
+
+struct Reader<'data> {
+    data: &'data [u8],
+}
+
+impl<'data> Reader<'data> {
+    fn new(data: &'data [u8]) -> Self {
+        Self { data }
+    }
+
+    fn remaining(&self) -> &[u8] {
+        self.data
+    }
+
+    fn read_u8_from_end(&mut self) -> Result<u8> {
+        let (last, rest) = self.data.split_last().ok_or(RingRtcError::BufferTooSmall)?;
+        self.data = rest;
+        Ok(*last)
+    }
+
+    fn read_u32_from_end(&mut self) -> Result<u32> {
+        Ok(u32::from_be_bytes(
+            self.read_slice_from_end(size_of::<u32>())?.try_into()?,
+        ))
+    }
+
+    fn read_slice_from_end(&mut self, len: usize) -> Result<&'data [u8]> {
+        if len > self.data.len() {
+            return Err(RingRtcError::BufferTooSmall.into());
+        }
+        let (rest, read) = self.data.split_at(self.data.len() - len);
+        self.data = rest;
+        Ok(read)
+    }
+
+    fn read_slice_from_start(&mut self, len: usize) -> Result<&'data [u8]> {
+        if len > self.data.len() {
+            return Err(RingRtcError::BufferTooSmall.into());
+        }
+
+        let (read, rest) = self.data.split_at(len);
+        self.data = rest;
+        Ok(read)
+    }
+}
+
 fn generate_local_secret_and_public_key() -> Result<(StaticSecret, PublicKey)> {
     let secret = StaticSecret::random_from_rng(OsRng);
     let public = PublicKey::from(&secret);
@@ -2411,8 +2550,8 @@ fn negotiate_srtp_keys(
     caller_identity_key: &[u8],
     callee_identity_key: &[u8],
 ) -> Result<NegotiatedSrtpKeys> {
-    // info!("Negotiating SRTP keys using local_public_key: {:?}, remote_public_key: {:?}, caller_identity_key: {:?}, callee_identity_key: {:?}",
-    //     PublicKey::from(local_secret).as_bytes(), remote_public_key, caller_identity_key, callee_identity_key);
+    info!("Negotiating SRTP keys using local_public_key: {:?}, remote_public_key: {:?}, caller_identity_key: {:?}, callee_identity_key: {:?}",
+        PublicKey::from(local_secret).as_bytes(), remote_public_key, caller_identity_key, callee_identity_key);
 
     let remote_public_key = {
         let mut array = [0u8; 32];

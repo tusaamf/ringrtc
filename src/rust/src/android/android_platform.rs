@@ -19,7 +19,7 @@ use jni::{
 };
 
 use crate::{
-    android::{error::AndroidError, jni_util::*, webrtc_java_media_stream::JavaMediaStream},
+    android::{call_manager::{P2P_ANSWERER_DEMUX_ID, P2P_OFFERER_DEMUX_ID}, error::AndroidError, jni_util::*, webrtc_java_media_stream::JavaMediaStream},
     common::{
         ApplicationEvent, CallConfig, CallDirection, CallEndReason, CallId, CallMediaType,
         DeviceId, Result,
@@ -272,6 +272,12 @@ impl Platform for AndroidPlatform {
             call_config.audio_jitter_buffer_config.max_target_delay_ms;
 
         let connection = Connection::new(
+            // TUNT, add set_stream_ids like group call
+            if call.direction() == CallDirection::Outgoing {
+                P2P_OFFERER_DEMUX_ID
+            } else {
+                P2P_ANSWERER_DEMUX_ID
+            },
             call.clone(),
             remote_device_id,
             connection_type,
@@ -305,10 +311,22 @@ impl Platform for AndroidPlatform {
         if jni_connection.is_null() {
             return Err(AndroidError::CreateJniConnection.into());
         }
+
         let jni_connection = env.new_global_ref(jni_connection)?;
         let platform = self.try_clone()?;
-        let android_connection = AndroidConnection::new(platform, jni_connection);
+        let android_connection = AndroidConnection::new(platform, jni_connection.clone());
         connection.set_app_connection(android_connection)?;
+
+        let native_audio_sender = jni_call_method(
+            env,
+            &jni_connection,
+            "getNativeAudioSender",
+            jni_args!(() -> long),
+        )?;
+        info!("create_connection(): native_audio_sender: {}", native_audio_sender);
+        if native_audio_sender != 0 {
+            connection.set_frame_encryptor_on_sender(native_audio_sender as usize)?;
+        }
 
         Ok(connection)
     }

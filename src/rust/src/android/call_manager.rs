@@ -44,9 +44,12 @@ use crate::{
         peer_connection::PeerConnection,
         peer_connection_factory::{self as pcf, PeerConnectionFactory},
         peer_connection_observer::PeerConnectionObserver,
-        peer_connection_observer::PeerConnectionObserverTrait,
     },
 };
+
+// TUNT, add set_stream_ids like group call
+pub(crate) const P2P_OFFERER_DEMUX_ID: u32 = 8386;
+pub(crate) const P2P_ANSWERER_DEMUX_ID: u32 = 8386;
 
 /// Public type for Android CallManager
 pub type AndroidCallManager = CallManager<AndroidPlatform>;
@@ -102,6 +105,8 @@ pub fn create_peer_connection(
     jni_rtc_config: JObject,
     jni_media_constraints: JObject,
 ) -> Result<jlong> {
+    // TUNT, add set_stream_ids like group call
+    // let local_demux_id = unsafe { native_connection.as_ref() }.unwrap().local_demux_id();
     let connection = unsafe { native_connection.as_mut() }.ok_or_else(|| {
         RingRtcError::NullPointer(
             "create_peer_connection".to_owned(),
@@ -119,6 +124,9 @@ pub fn create_peer_connection(
         false, /* enable_video_frame_event */
         false, /* enable_video_frame_content */
     )?;
+    // Capture the pointer before moving ownership into JNI
+    let observer_ptr = pc_observer.rffi().borrow().as_ptr() as usize;
+    connection.set_raw_pc_observer_ptr(observer_ptr)?;
 
     // construct JNI OwnedPeerConnection object
     let jni_owned_pc = unsafe {
@@ -130,6 +138,8 @@ pub fn create_peer_connection(
             jni_media_constraints,
             pc_observer.into_rffi().into_owned().as_ptr() as jlong,
             JObject::null(),
+            // TUNT: add local_demux_id like group call
+            // local_demux_id,
         )
     };
     debug!("jni_owned_pc: {}", jni_owned_pc);

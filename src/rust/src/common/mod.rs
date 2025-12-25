@@ -14,7 +14,7 @@ use std::fmt;
 
 use crate::webrtc::{
     media::AudioEncoderConfig,
-    peer_connection_factory::{AudioConfig, AudioJitterBufferConfig},
+    peer_connection_factory::{AudioConfig, AudioJitterBufferConfig, McuConfig},
 };
 
 /// Common Result type, using `anyhow::Error` for Error.
@@ -843,6 +843,8 @@ pub struct CallConfig {
     pub audio_rtcp_report_interval_ms: i32,
 
     pub enable_vp9: bool,
+
+    pub mcu_config: McuConfig,
 }
 
 impl Default for CallConfig {
@@ -858,6 +860,7 @@ impl Default for CallConfig {
             audio_jitter_buffer_config: Default::default(),
             audio_rtcp_report_interval_ms: 5000,
             enable_vp9: true,
+            mcu_config: McuConfig::default(),
         }
     }
 }

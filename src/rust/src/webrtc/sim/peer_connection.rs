@@ -396,3 +396,11 @@ pub unsafe fn Rust_closePeerConnection(
 ) {
     info!("Rust_closePeerConnection:");
 }
+
+#[allow(non_snake_case, clippy::missing_safety_doc)]
+pub unsafe fn Rust_setFrameEncryptorOnSender(
+    _peer_connection: webrtc::ptr::BorrowedRc<RffiPeerConnection>,
+    _sender_ptr: usize,
+) {
+    info!("Rust_setFrameEncryptorOnSender");
+}

@@ -14,4 +14,17 @@ docker exec -it ringrtc bash -c "
 echo "=== HOÀN TẤT! ==="
 echo "File AAR của bạn nằm tại thư mục: out/"
 
+bin/build-aar -a arm64 -d --webrtc-only --archive-webrtc
+bin/build-aar -a arm64 -d -r --webrtc-only --archive-webrtc
+
+bin/build-aar -a arm64 -d --ringrtc-only
 bin/build-aar -a arm64 -d -r --ringrtc-only
+
+docker exec -it ringrtc bash -c "
+    bin/build-aar -a arm64 -d --webrtc-only --archive-webrtc
+    bin/build-aar -a arm64 -d --ringrtc-only
+"
+
+docker exec -it ringrtc bash -c "
+    bin/build-aar -a arm64 -d --ringrtc-only
+"
