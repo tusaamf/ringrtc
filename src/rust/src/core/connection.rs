@@ -2271,8 +2271,15 @@ where
             TypeMess::CalleeDecrypt
         };
 
-        let spidev_conn = ConnectionSpidev::new(10, 100, 3, "/dev/spidev0.0");
-        // let mcu_message = spidev_conn.create_mcu_frame_message(mess_type, encrypted_payload)?;
+        let mcu_config = &self.call_config.mcu_config;
+
+        let sc = ConnectionSpidev::new(mcu_config.baudrate, mcu_config.sleep_us, mcu_config.retry_quota, &mcu_config.spidev_path);
+        let mcu_message = sc.create_mcu_frame_message(mess_type, encrypted_payload);
+        let formatted_mcu_message_string = format!("{:?}", mcu_message.ok().unwrap());
+        debug!(
+            "decrypt_media_impl (DEBUG): mcu_message: {}",
+            formatted_mcu_message_string
+        );
         // let mcu_response = spidev_conn.send_message_to_mcu(mcu_message)?;
 
         // if mcu_response.get(0) != Some(&MCU_FIRST_FRAME_DATA) {
@@ -2443,19 +2450,19 @@ impl<'buf> Writer<'buf> {
         self.buf.len() - self.offset
     }
 
-    fn write_u8(&mut self, input: u8) -> Result<()> {
-        if self.remaining_len() < 1 {
-            return Err(RingRtcError::BufferTooSmall.into());
-        }
-        self.buf[self.offset] = input;
-        self.offset += 1;
-        Ok(())
-    }
+    // fn write_u8(&mut self, input: u8) -> Result<()> {
+    //     if self.remaining_len() < 1 {
+    //         return Err(RingRtcError::BufferTooSmall.into());
+    //     }
+    //     self.buf[self.offset] = input;
+    //     self.offset += 1;
+    //     Ok(())
+    // }
 
-    fn write_u32(&mut self, input: u32) -> Result<()> {
-        self.write_slice(&input.to_be_bytes())?;
-        Ok(())
-    }
+    // fn write_u32(&mut self, input: u32) -> Result<()> {
+    //     self.write_slice(&input.to_be_bytes())?;
+    //     Ok(())
+    // }
 
     fn write_slice(&mut self, input: &[u8]) -> Result<&mut [u8]> {
         if self.remaining_len() < input.len() {
@@ -2501,26 +2508,26 @@ impl<'data> Reader<'data> {
         self.data
     }
 
-    fn read_u8_from_end(&mut self) -> Result<u8> {
-        let (last, rest) = self.data.split_last().ok_or(RingRtcError::BufferTooSmall)?;
-        self.data = rest;
-        Ok(*last)
-    }
+    // fn read_u8_from_end(&mut self) -> Result<u8> {
+    //     let (last, rest) = self.data.split_last().ok_or(RingRtcError::BufferTooSmall)?;
+    //     self.data = rest;
+    //     Ok(*last)
+    // }
 
-    fn read_u32_from_end(&mut self) -> Result<u32> {
-        Ok(u32::from_be_bytes(
-            self.read_slice_from_end(size_of::<u32>())?.try_into()?,
-        ))
-    }
+    // fn read_u32_from_end(&mut self) -> Result<u32> {
+    //     Ok(u32::from_be_bytes(
+    //         self.read_slice_from_end(size_of::<u32>())?.try_into()?,
+    //     ))
+    // }
 
-    fn read_slice_from_end(&mut self, len: usize) -> Result<&'data [u8]> {
-        if len > self.data.len() {
-            return Err(RingRtcError::BufferTooSmall.into());
-        }
-        let (rest, read) = self.data.split_at(self.data.len() - len);
-        self.data = rest;
-        Ok(read)
-    }
+    // fn read_slice_from_end(&mut self, len: usize) -> Result<&'data [u8]> {
+    //     if len > self.data.len() {
+    //         return Err(RingRtcError::BufferTooSmall.into());
+    //     }
+    //     let (rest, read) = self.data.split_at(self.data.len() - len);
+    //     self.data = rest;
+    //     Ok(read)
+    // }
 
     fn read_slice_from_start(&mut self, len: usize) -> Result<&'data [u8]> {
         if len > self.data.len() {

@@ -870,6 +870,11 @@ impl CallConfig {
         self.data_mode = data_mode;
         self
     }
+
+    pub fn with_mcu_config(mut self, mcu_config: McuConfig) -> Self {
+        self.mcu_config = mcu_config;
+        self
+    }
 }
 
 // Benchmarking component list.

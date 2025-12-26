@@ -391,7 +391,8 @@ public class CallManager {
                                 boolean                        hideIp,
                                 DataMode                       dataMode,
                       @Nullable Integer                        audioLevelsIntervalMs,
-                                boolean                        enableCamera)
+                                boolean                        enableCamera,
+                      @NonNull  McuConfig                      mcuConfig)
     throws CallException
   {
     checkCallManagerExists();
@@ -420,6 +421,7 @@ public class CallManager {
     ringrtcProceed(nativeCallManager,
                    callId.longValue(),
                    callContext,
+                   mcuConfig,
                    dataMode.ordinal(),
                    audioLevelsIntervalMillis);
   }
@@ -2443,6 +2445,7 @@ public class CallManager {
     void ringrtcProceed(long        nativeCallManager,
                         long        callId,
                         CallContext callContext,
+                        McuConfig   mcuConfig,
                         int         dataMode,
                         int         audioLevelsIntervalMillis)
     throws CallException;

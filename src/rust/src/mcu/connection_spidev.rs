@@ -70,6 +70,11 @@ impl ConnectionSpidev {
         mess_type: TypeMess,
         data: &[u8],
     ) -> CreateMCUFrameMessageResult {
+        info!(
+            "TUNT create_mcu_frame_message: baudrate_mhz: {}, mess_type: {}, data: {}, spidev_path: {}",
+            self.baudrate_mhz, self.sleep_us, self.retry_quota, self.spidev_path
+        );
+
         // 1. Xác định độ dài tối đa cho phép
         let max_data_length = match mess_type {
             TypeMess::CallerDecrypt | TypeMess::CalleeDecrypt => MAX_DATA_LENGTH_PER_DECRYPT_FRAME,

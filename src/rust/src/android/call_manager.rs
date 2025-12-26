@@ -42,7 +42,7 @@ use crate::{
     webrtc::{
         media,
         peer_connection::PeerConnection,
-        peer_connection_factory::{self as pcf, PeerConnectionFactory},
+        peer_connection_factory::{self as pcf, PeerConnectionFactory, McuConfig},
         peer_connection_observer::PeerConnectionObserver,
     },
 };
@@ -196,10 +196,11 @@ pub fn call(
 
 /// Application notification to proceed with a new call
 pub fn proceed(
-    env: &JNIEnv,
+    env: &mut JNIEnv,
     call_manager: *mut AndroidCallManager,
     call_id: jlong,
     jni_call_context: JObject,
+    jni_mcu_config: JObject,
     call_config: CallConfig,
     audio_levels_interval: Option<Duration>,
 ) -> Result<()> {
@@ -208,6 +209,46 @@ pub fn proceed(
     let platform = call_manager.platform()?.try_clone()?;
     let android_call_context =
         AndroidCallContext::new(platform, env.new_global_ref(jni_call_context)?);
+
+    const LONG_TYPE: &str = jni_signature!(long);
+    const INT_TYPE: &str = jni_signature!(int);
+    const STRING_TYPE: &str = jni_signature!(java.lang.String);
+
+    const BAUDRATE_FIELD: &str = "baudrate";
+    let baudrate =
+            jni_get_field(env, &jni_mcu_config, BAUDRATE_FIELD, INT_TYPE)?.i()?;
+    let baudrate = baudrate as u8;
+
+    const SLEEP_US_FIELD: &str = "sleepUs";
+    let sleep_us =
+            jni_get_field(env, &jni_mcu_config, SLEEP_US_FIELD, LONG_TYPE)?.j()?;
+    let sleep_us = sleep_us as u64;
+
+    const RETRY_QUOTA_FIELD: &str = "retryQuota";
+    let retry_quota =
+            jni_get_field(env, &jni_mcu_config, RETRY_QUOTA_FIELD, INT_TYPE)?.i()?;
+    let retry_quota = retry_quota as u8;
+
+    const SPIDEV_PATH_FIELD: &str = "spidevPath";
+    let spidev_path_j_path_obj =
+            jni_get_field(env, &jni_mcu_config, SPIDEV_PATH_FIELD, STRING_TYPE)?.l()?;
+    // We have java.lang.String, so we need to invoke the function to get the actual
+    // String value that is attached to it.
+    let spidev_path: String = if !spidev_path_j_path_obj.is_null() {
+        let j_str = jni::objects::JString::from(spidev_path_j_path_obj);
+        env.get_string(&j_str)?
+        .into() // Chuyển đổi sang Rust String
+    } else {
+        String::new() 
+    };
+
+    let mcu_config = McuConfig {
+        baudrate,
+        sleep_us,
+        retry_quota,
+        spidev_path,
+    };
+    let call_config = call_config.with_mcu_config(mcu_config);
 
     call_manager.proceed(
         call_id,

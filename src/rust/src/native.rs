@@ -430,6 +430,7 @@ impl Platform for NativePlatform {
         let context = call.call_context()?;
         // Like AndroidPlatform::create_connection
         let connection = Connection::new(
+            0,
             call.clone(),
             remote_device_id,
             connection_type,

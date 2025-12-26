@@ -143,6 +143,7 @@ pub unsafe extern "C" fn Java_org_signal_ringrtc_CallManager_ringrtcProceed(
     call_manager: jlong,
     call_id: jlong,
     jni_call_context: JObject,
+    jni_mcu_config: JObject,
     data_mode: jint,
     audio_levels_interval_millis: jint,
 ) {
@@ -153,10 +154,11 @@ pub unsafe extern "C" fn Java_org_signal_ringrtc_CallManager_ringrtcProceed(
     };
 
     match call_manager::proceed(
-        &env,
+        &mut env, // &env,
         call_manager as *mut AndroidCallManager,
         call_id,
         jni_call_context,
+        jni_mcu_config,
         CallConfig::default().with_data_mode(DataMode::from_i32(data_mode)),
         audio_levels_interval,
     ) {

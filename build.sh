@@ -3,6 +3,7 @@
 # Dừng script ngay lập tức nếu có lệnh bị lỗi
 set -e
 
+docker compose down
 docker compose up -d --build
 docker exec -it ringrtc bash -c "
     set -e
