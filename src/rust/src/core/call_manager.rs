@@ -85,7 +85,7 @@ macro_rules! handle_active_call_api {
         $f:expr
             $( , $a:expr)*
     ) => {{
-        info!("API:{}():", stringify!($f).replace("::", ":"));
+        info!("{}():", stringify!($f).replace("::", ":"));
         let mut call_manager = $s.clone();
         $s.worker_spawn(move || {
             if let Err(err) = $f(&mut call_manager $( , $a)*) {
@@ -127,7 +127,7 @@ macro_rules! handle_api {
             $( , $a:expr)*
     ) => {{
         let mut call_manager = $s.clone();
-        info!("API:{}():", stringify!($f).replace("::", ":"));
+        info!("{}():", stringify!($f).replace("::", ":"));
         $s.worker_spawn(move || {
             if let Err(err) = $f(&mut call_manager $( , $a)*) {
                 error!("{} failed: {}", stringify!($f), err);
@@ -556,7 +556,7 @@ where
         call_media_type: CallMediaType,
         local_device_id: DeviceId,
     ) -> Result<()> {
-        info!("API:call():");
+        info!("call():");
         let call_id = CallId::random();
         self.create_outgoing_call(remote_peer, call_id, call_media_type, local_device_id)
     }
@@ -569,7 +569,7 @@ where
         call_media_type: CallMediaType,
         local_device_id: DeviceId,
     ) -> Result<()> {
-        info!("API:create_outgoing_call({}):", call_id);
+        info!("create_outgoing_call({}):", call_id);
 
         let mut call_manager = self.clone();
         self.worker_spawn(move || {
@@ -692,7 +692,7 @@ where
         call_id: CallId,
         received: signaling::ReceivedOffer,
     ) -> Result<()> {
-        info!("API:received_offer():");
+        info!("received_offer():");
 
         let mut call_manager = self.clone();
         self.worker_spawn(move || {
