@@ -29,7 +29,8 @@ use crate::{
         Result, RingBench,
         actor::{Actor, Stopper},
         units::DataRate,
-    }, core::{
+    },
+    core::{
         call::Call,
         call_mutex::CallMutex,
         connection_fsm::{ConnectionEvent, ConnectionStateMachine},
@@ -37,10 +38,12 @@ use crate::{
         platform::Platform,
         signaling,
         util::{ptr_as_box, redact_string},
-    }, mcu::{
-        connection_spidev::ConnectionSpidev,
-        connection_spidev::TypeMess, 
-    }, error::RingRtcError, lite::sfu::DemuxId, protobuf, webrtc::{
+    },
+    error::RingRtcError,
+    lite::sfu::DemuxId,
+    mcu::{connection_spidev::ConnectionSpidev, connection_spidev::TypeMess},
+    protobuf,
+    webrtc::{
         self,
         ice_gatherer::IceGatherer,
         media::{MediaStream, VideoFrame, VideoFrameMetadata, VideoSink},
@@ -55,7 +58,7 @@ use crate::{
             SessionDescription, SrtpCryptoSuite, SrtpKey, create_csd_observer, create_ssd_observer,
         },
         stats_observer::{StatsObserver, StatsSnapshotConsumer, create_stats_observer},
-    }
+    },
 };
 
 /// Used to generate stats, to retransmit RTP messages, and to get audio levels.
@@ -732,8 +735,16 @@ where
                 // Set the remote max based on the bitrate in the answer.
                 bandwidth_controller.remote_max = v4_answer.max_bitrate_bps.map(DataRate::from_bps);
 
-                let offer = SessionDescription::offer_from_v4(&v4_offer, &self.call_config, self.local_demux_id)?;
-                let answer = SessionDescription::answer_from_v4(&v4_answer, &self.call_config, self.local_demux_id)?;
+                let offer = SessionDescription::offer_from_v4(
+                    &v4_offer,
+                    &self.call_config,
+                    self.local_demux_id,
+                )?;
+                let answer = SessionDescription::answer_from_v4(
+                    &v4_answer,
+                    &self.call_config,
+                    self.local_demux_id,
+                )?;
 
                 info!(
                     "Incoming answer codecs: {:?}, max_bitrate: {:?}, bandwidth_controller: {:?}",
@@ -758,12 +769,29 @@ where
                     callee_identity_key,
                 )?;
                 info!("start_outgoing_child(): SRTP keys negotiated. Disabling DTLS.");
-                
+
                 // Re-initialize the crypto context with the negotiated keys.
                 {
-                    let mut frame_crypto_context = self.frame_crypto_context.lock().expect("Get e2ee context to set keys");
-                    frame_crypto_context.reset_send_ratchet(offer_key.key.clone().try_into().map_err(|_| RingRtcError::SrtpKeyNegotiationFailure)?);
-                    frame_crypto_context.add_receive_secret(self.remote_device_id(), 0, answer_key.key.clone().try_into().map_err(|_| RingRtcError::SrtpKeyNegotiationFailure)?);
+                    let mut frame_crypto_context = self
+                        .frame_crypto_context
+                        .lock()
+                        .expect("Get e2ee context to set keys");
+                    frame_crypto_context.reset_send_ratchet(
+                        offer_key
+                            .key
+                            .clone()
+                            .try_into()
+                            .map_err(|_| RingRtcError::SrtpKeyNegotiationFailure)?,
+                    );
+                    frame_crypto_context.add_receive_secret(
+                        self.remote_device_id(),
+                        0,
+                        answer_key
+                            .key
+                            .clone()
+                            .try_into()
+                            .map_err(|_| RingRtcError::SrtpKeyNegotiationFailure)?,
+                    );
                 }
 
                 offer.disable_dtls_and_set_srtp_key(&offer_key)?;
@@ -841,8 +869,11 @@ where
                     v4_offer.receive_video_codecs, v4_offer.max_bitrate_bps, bandwidth_controller
                 );
 
-                let offer =
-                    SessionDescription::offer_from_v4(v4_offer, &self.call_config, self.local_demux_id)?;
+                let offer = SessionDescription::offer_from_v4(
+                    v4_offer,
+                    &self.call_config,
+                    self.local_demux_id,
+                )?;
 
                 (offer, v4_offer.public_key.clone())
             } else {
@@ -854,7 +885,7 @@ where
                 None => {
                     warn!("start_incoming(): No remote public key in offer. DTLS will be used.");
                     None
-                },
+                }
                 Some(remote_public_key) => {
                     let caller_identity_key = &received.sender_identity_key;
                     let callee_identity_key = &received.receiver_identity_key;
@@ -899,7 +930,11 @@ where
                 );
 
                 // We have to change the local answer to match what we send back
-                answer = SessionDescription::answer_from_v4(&v4_answer, &self.call_config, self.local_demux_id)?;
+                answer = SessionDescription::answer_from_v4(
+                    &v4_answer,
+                    &self.call_config,
+                    self.local_demux_id,
+                )?;
                 // And we have to make sure to do this again since answer_from_v4 doesn't do it.
                 if let Some(answer_key) = &answer_key {
                     answer.disable_dtls_and_set_srtp_key(answer_key)?;
@@ -2214,56 +2249,174 @@ where
     fn get_ciphertext_buffer_size(plaintext_size: usize) -> usize {
         // If we get asked to encrypt a message of size greater than (usize::MAX - FRAME_ENCRYPTION_FOOTER_LEN),
         // we'd fail to write the footer in encrypt_media and the frame would be dropped.
-        plaintext_size.saturating_add(Self::FRAME_ENCRYPTION_HEADER_LEN)
+        plaintext_size.saturating_add(128)
+        // plaintext_size
     }
 
     pub fn get_plaintext_buffer_size(ciphertext_size: usize) -> usize {
-        ciphertext_size.saturating_sub(Self::FRAME_ENCRYPTION_HEADER_LEN)
+        // ciphertext_size.saturating_sub(Self::FRAME_ENCRYPTION_HEADER_LEN)
+        // ciphertext_size.saturating_sub(128)
+        ciphertext_size
     }
 
     fn encrypt_media_impl(&self, plaintext: &[u8], ciphertext_buffer: &mut [u8]) -> Result<usize> {
-        let ciphertext_size = Self::get_ciphertext_buffer_size(plaintext.len());
+        // debug!(
+        //     "encrypt_media_impl (DEBUG): plaintext: {}, {}, {}",
+        //     plaintext.len(),
+        //     ciphertext_buffer.len(),
+        //     plaintext
+        //         .iter()
+        //         .map(|b| format!("{:02X}", b))
+        //         .collect::<Vec<_>>()
+        //         .join(" ")
+        // );
+
+        // let ciphertext_size = Self::get_ciphertext_buffer_size(plaintext.len());
         let mut ciphertext = Writer::new(ciphertext_buffer);
 
         // Thử 1 số điện thoại mặc định
-        let e164: frame_crypto::E164 = *b"+84984999999";
-        ciphertext.write_slice(&e164)?;
-        let encrypted_payload = ciphertext.write_slice(plaintext)?;
+        // let e164: frame_crypto::E164 = *b"+84984999999";
+        // ciphertext.write_slice(&e164)?;
+        // let encrypted_payload = ciphertext.write_slice(plaintext)?;
+
+        let mess_type = if self.direction() == CallDirection::Outgoing {
+            TypeMess::CallerEncrypt
+        } else {
+            TypeMess::CalleeEncrypt
+        };
+
+        let mcu_config = &self.call_config.mcu_config;
+
+        let sc = ConnectionSpidev::new(
+            mcu_config.baudrate,
+            mcu_config.sleep_us,
+            mcu_config.retry_quota,
+            &mcu_config.spidev_path,
+        );
+        // let mcu_message = sc.create_mcu_frame_message(mess_type, encrypted_payload);
+        // let formatted_mcu_message_string = format!("{:?}", mcu_message.ok().unwrap());
 
         // gửi borrowed của encrypted_payload đi để encrypt với MCU
 
-        // Log dữ liệu plaintext_buffer
-        let formatted_string = format!("{:?}", ciphertext_buffer);
-        debug!(
-            "encrypt_media_impl (DEBUG): ciphertext_size: {} data: {}",
-            ciphertext_size,
-            formatted_string
-        );
+        let max_len = crate::mcu::connection_spidev::MAX_DATA_LENGTH_PER_ENCRYPT_FRAME;
 
-        Ok(ciphertext_size)
+        for chunk in plaintext.chunks(max_len) {
+            let mcu_message = sc
+                .create_mcu_frame_message(mess_type, chunk)
+                .map_err(|e| RingRtcError::FailedToEncrypt)?;
+
+            // debug!(
+            //     "encrypt_media_impl (DEBUG): sending mcu_message: {:?}",
+            //     mcu_message
+            //         .iter()
+            //         .map(|b| format!("{:02X}", b))
+            //         .collect::<Vec<_>>()
+            //         .join(" ")
+            // );
+
+            let mcu_response = sc
+                .send_message_to_mcu(mcu_message)
+                .map_err(|e| RingRtcError::FailedToEncrypt)?;
+
+            // debug!(
+            //     "encrypt_media_impl (DEBUG): receive mcu_message: {:?}",
+            //     mcu_response
+            //         .iter()
+            //         .map(|b| format!("{:02X}", b))
+            //         .collect::<Vec<_>>()
+            //         .join(" ")
+            // );
+
+            if mcu_response.get(0) != Some(&crate::mcu::connection_spidev::MCU_FIRST_FRAME_DATA) {
+                debug!("Invalid MCU response frame");
+                return Err(RingRtcError::FailedToEncrypt.into());
+            }
+
+            if mcu_response.len() < 5 {
+                debug!("MCU response too short");
+                return Err(RingRtcError::FailedToEncrypt.into());
+            }
+            let payload_len_bytes = &mcu_response[3..5];
+            let payload_len =
+                u16::from_be_bytes(payload_len_bytes.try_into().unwrap_or([0, 0])) as usize;
+            if mcu_response.len() < 8 + payload_len {
+                debug!("MCU response data incomplete");
+                return Err(RingRtcError::FailedToEncrypt.into());
+            }
+            let encrypted_data = &mcu_response[8..8 + payload_len];
+
+            // debug!(
+            //     "encrypt_media_impl (DEBUG): payload_len | encrypted_data: {:?} | {:?}",
+            //     payload_len,
+            //     encrypted_data
+            //         .iter()
+            //         .map(|b| format!("{:02X}", b))
+            //         .collect::<Vec<_>>()
+            //         .join(" ")
+            // );
+
+            // Write Length (2 bytes)
+            ciphertext.write_slice(payload_len_bytes)?;
+            // Write Data (payload_len bytes)
+            ciphertext.write_slice(encrypted_data)?;
+        }
+
+        // Log dữ liệu plaintext_buffer
+        let total_len = ciphertext.offset;
+        let formatted_string = format!(
+            "{:?}",
+            &ciphertext_buffer[..total_len]
+                .iter()
+                .map(|b| format!("{:02X}", b))
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+        // debug!(
+        //     "encrypt_media_impl (DEBUG): ciphertext: {}, {}",
+        //     total_len,
+        //     formatted_string
+        // );
+
+        Ok(total_len)
     }
 
-    fn decrypt_media_impl(
-        &self,
-        ciphertext: &[u8],
-        plaintext_buffer: &mut [u8],
-    ) -> Result<usize> {
+    fn decrypt_media_impl(&self, ciphertext: &[u8], plaintext_buffer: &mut [u8]) -> Result<usize> {
         // Tạm thời chỉ sao chép dữ liệu để kiểm tra, không giải mã
-        let mut ciphertext = Reader::new(ciphertext);
-        let mut plaintext = Writer::new(plaintext_buffer);
-        
-        let e164: frame_crypto::E164 = ciphertext
-            .read_slice_from_start(size_of::<frame_crypto::E164>())?
-            .try_into()?;
-
+        // let mut ciphertext = Reader::new(ciphertext);
+        // let mut plaintext = Writer::new(plaintext_buffer);
+        // let e164: frame_crypto::E164 = ciphertext
+        //     .read_slice_from_start(size_of::<frame_crypto::E164>())?
+        //     .try_into()?;
         // Allow for in-place decryption from ciphertext to plaintext_buffer by using
         // the write_slice that supports overlapping copies.
-        let encrypted_payload = plaintext.write_slice_overlapping(ciphertext.remaining())?;
+        // let encrypted_payload = plaintext.write_slice_overlapping(ciphertext.remaining())?;
 
         // gửi borrowed của encrypted_payload đi để decrypt với MCU
-        // TODO: gọi connection_spidev ở đây 
+        // TODO: gọi connection_spidev ở đây
         // (1) create_mcu_frame_message với encypted_payload
         // (2) send_message_to_mcu với message đã tạo từ (1) và replaced vào encrypted_payload
+        // let mcu_config = &self.call_config.mcu_config;
+        // let sc = ConnectionSpidev::new(mcu_config.baudrate, mcu_config.sleep_us, mcu_config.retry_quota, &mcu_config.spidev_path);
+        // let mcu_message = sc.create_mcu_frame_message(mess_type, encrypted_payload);
+        // let formatted_mcu_message_string = format!("{:?}", mcu_message.ok().unwrap());
+        // debug!(
+        //     "decrypt_media_impl (DEBUG): mcu_message: {}",
+        //     formatted_mcu_message_string
+        // );
+
+        // debug!(
+        //     "decrypt_media_impl (DEBUG): ciphertext: {}, {}, {}",
+        //     ciphertext.len(),
+        //     plaintext_buffer.len(),
+        //     ciphertext
+        //         .iter()
+        //         .map(|b| format!("{:02X}", b))
+        //         .collect::<Vec<_>>()
+        //         .join(" ")
+        // );
+
+        let mut ciphertext = Reader::new(ciphertext);
+        let mut plaintext = Writer::new(plaintext_buffer);
 
         let mess_type = if self.direction() == CallDirection::Outgoing {
             TypeMess::CallerDecrypt
@@ -2272,39 +2425,79 @@ where
         };
 
         let mcu_config = &self.call_config.mcu_config;
-
-        let sc = ConnectionSpidev::new(mcu_config.baudrate, mcu_config.sleep_us, mcu_config.retry_quota, &mcu_config.spidev_path);
-        let mcu_message = sc.create_mcu_frame_message(mess_type, encrypted_payload);
-        let formatted_mcu_message_string = format!("{:?}", mcu_message.ok().unwrap());
-        debug!(
-            "decrypt_media_impl (DEBUG): mcu_message: {}",
-            formatted_mcu_message_string
+        let sc = ConnectionSpidev::new(
+            mcu_config.baudrate,
+            mcu_config.sleep_us,
+            mcu_config.retry_quota,
+            &mcu_config.spidev_path,
         );
-        // let mcu_response = spidev_conn.send_message_to_mcu(mcu_message)?;
 
-        // if mcu_response.get(0) != Some(&MCU_FIRST_FRAME_DATA) {
-        //     return Err(
-        //         RingRtcError::Other("Invalid MCU response frame for decrypt".to_string()).into(),
-        //     );
-        // }
-        // let payload_len = u16::from_be_bytes(mcu_response[3..5].try_into()?) as usize;
-        // let decrypted_data = &mcu_response[8..8 + payload_len];
+        while ciphertext.remaining().len() > 0 {
+            let len = ciphertext.read_u16_from_start()? as usize;
+            let chunk_data = ciphertext.read_slice_from_start(len)?;
 
-        // if encrypted_payload.len() < decrypted_data.len() {
-        //     return Err(RingRtcError::BufferTooSmall.into());
-        // }
-        // encrypted_payload[..decrypted_data.len()].copy_from_slice(decrypted_data);
+            let mcu_message = sc
+                .create_mcu_frame_message(mess_type, chunk_data)
+                .map_err(|e| RingRtcError::FailedToDecrypt)?;
+
+            // debug!(
+            //     "decrypt_media_impl (DEBUG): sending mcu_message: {}",
+            //     mcu_message
+            //         .iter()
+            //         .map(|b| format!("{:02X}", b))
+            //         .collect::<Vec<_>>()
+            //         .join(" ")
+            // );
+
+            let mcu_response = sc
+                .send_message_to_mcu(mcu_message)
+                .map_err(|e| RingRtcError::FailedToDecrypt)?;
+
+            if mcu_response.get(0) != Some(&crate::mcu::connection_spidev::MCU_FIRST_FRAME_DATA) {
+                return Err(RingRtcError::FailedToDecrypt.into());
+            }
+
+            if mcu_response.len() < 5 {
+                return Err(RingRtcError::FailedToDecrypt.into());
+            }
+
+            // debug!(
+            //     "decrypt_media_impl (DEBUG): mcu_response: {}",
+            //     mcu_response
+            //         .iter()
+            //         .map(|b| format!("{:02X}", b))
+            //         .collect::<Vec<_>>()
+            //         .join(" ")
+            // );
+
+            let payload_len_bytes = &mcu_response[3..5];
+            let payload_len =
+                u16::from_be_bytes(payload_len_bytes.try_into().unwrap_or([0, 0])) as usize;
+            if mcu_response.len() < 8 + payload_len {
+                return Err(RingRtcError::FailedToDecrypt.into());
+            }
+            // bỏ thêm 4 bytes đâù của data đi
+            let decrypted_data = &mcu_response[12..8 + payload_len];
+
+            plaintext.write_slice(decrypted_data)?;
+        }
 
         // Log dữ liệu plaintext_buffer
-        let formatted_string = format!("{:?}", encrypted_payload);
-        debug!(
-            "decrypt_media_impl (DEBUG): e164:{:?}, plaintext_size: {} data: {}",
-            e164,
-            encrypted_payload.len(),
-            formatted_string
+        let total_len = plaintext.offset;
+        let formatted_string = format!(
+            "{:?}",
+            &plaintext_buffer[..total_len]
+                .iter()
+                .map(|b| format!("{:02X}", b))
+                .collect::<Vec<_>>()
+                .join(" ")
         );
+        // debug!(
+        //     "decrypt_media_impl (DEBUG): plaintext: {}, {}",
+        //     total_len, formatted_string
+        // );
 
-        Ok(encrypted_payload.len())
+        Ok(total_len)
     }
 }
 
@@ -2450,19 +2643,24 @@ impl<'buf> Writer<'buf> {
         self.buf.len() - self.offset
     }
 
-    // fn write_u8(&mut self, input: u8) -> Result<()> {
-    //     if self.remaining_len() < 1 {
-    //         return Err(RingRtcError::BufferTooSmall.into());
-    //     }
-    //     self.buf[self.offset] = input;
-    //     self.offset += 1;
-    //     Ok(())
-    // }
+    fn write_u8(&mut self, input: u8) -> Result<()> {
+        if self.remaining_len() < 1 {
+            return Err(RingRtcError::BufferTooSmall.into());
+        }
+        self.buf[self.offset] = input;
+        self.offset += 1;
+        Ok(())
+    }
 
-    // fn write_u32(&mut self, input: u32) -> Result<()> {
-    //     self.write_slice(&input.to_be_bytes())?;
-    //     Ok(())
-    // }
+    fn write_u16(&mut self, input: u16) -> Result<()> {
+        self.write_slice(&input.to_be_bytes())?;
+        Ok(())
+    }
+
+    fn write_u32(&mut self, input: u32) -> Result<()> {
+        self.write_slice(&input.to_be_bytes())?;
+        Ok(())
+    }
 
     fn write_slice(&mut self, input: &[u8]) -> Result<&mut [u8]> {
         if self.remaining_len() < input.len() {
@@ -2529,6 +2727,27 @@ impl<'data> Reader<'data> {
     //     Ok(read)
     // }
 
+    fn read_u8_from_start(&mut self) -> Result<u8> {
+        let (first, rest) = self
+            .data
+            .split_first()
+            .ok_or(RingRtcError::BufferTooSmall)?;
+        self.data = rest;
+        Ok(*first)
+    }
+
+    fn read_u16_from_start(&mut self) -> Result<u16> {
+        Ok(u16::from_be_bytes(
+            self.read_slice_from_start(size_of::<u16>())?.try_into()?,
+        ))
+    }
+
+    fn read_u32_from_start(&mut self) -> Result<u32> {
+        Ok(u32::from_be_bytes(
+            self.read_slice_from_start(size_of::<u32>())?.try_into()?,
+        ))
+    }
+
     fn read_slice_from_start(&mut self, len: usize) -> Result<&'data [u8]> {
         if len > self.data.len() {
             return Err(RingRtcError::BufferTooSmall.into());
@@ -2557,8 +2776,13 @@ fn negotiate_srtp_keys(
     caller_identity_key: &[u8],
     callee_identity_key: &[u8],
 ) -> Result<NegotiatedSrtpKeys> {
-    info!("Negotiating SRTP keys using local_public_key: {:?}, remote_public_key: {:?}, caller_identity_key: {:?}, callee_identity_key: {:?}",
-        PublicKey::from(local_secret).as_bytes(), remote_public_key, caller_identity_key, callee_identity_key);
+    info!(
+        "Negotiating SRTP keys using local_public_key: {:?}, remote_public_key: {:?}, caller_identity_key: {:?}, callee_identity_key: {:?}",
+        PublicKey::from(local_secret).as_bytes(),
+        remote_public_key,
+        caller_identity_key,
+        callee_identity_key
+    );
 
     let remote_public_key = {
         let mut array = [0u8; 32];

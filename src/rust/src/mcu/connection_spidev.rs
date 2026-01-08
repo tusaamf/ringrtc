@@ -10,6 +10,9 @@ pub const MAX_DATA_LENGTH_PER_ENCRYPT_FRAME: usize = 180;
 // data cho khung decrypt không vượt quá 216
 pub const MAX_DATA_LENGTH_PER_DECRYPT_FRAME: usize = 216;
 
+// | SOF (1 byte) | Frame ID (2 bytes) | Length (2 bytes) | Type Message (1 byte) | Header CRC (2 bytes) | Data (N bytes) | Data CRC (2 bytes)
+// [55, 00, 01, 00, 84, 81, 99, AE, 41, 05, EF, E9, 8D, 0F, 1C, A7, 31, 86, E0, E4, 03, A8, 79, 3C, 5D, 09, 46, 28, C5, 47, 32, 1D, EA, 4C, CC, 30, 6D, 3F, BE, AC, 80, 67, 9B, 96, 5D, 2C, 57, 15, AE, D7, 3C, B7, 48, EC, 2B, 43, A5, ED, CC, 22, 57, D9, F3, DA, 07, 58, F4, AF, 37, 76, FD, 33, D1, 33, 41, 05, A3, EA, BF, C4, 4B, 24, 9E, 8D, 53, 03, 91, 68, 2E, C8, DD, 87, D4, 3C, 55, 67, 7D, 5D, 3F, 90, BF, A9, 67, 87, 30, FA, 18, 92, 7B, CC, D2, C9, ED, 8D, D8, 2F, 4B, 06, A8, FE, 46, 4A, 14, E3, 16, 1D, D2, FD, C7, 18, DE, 8F, CD, 48, 90, B8, 06, 8C, B3, B8, AF, B3]
+
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TypeMess {
@@ -70,10 +73,10 @@ impl ConnectionSpidev {
         mess_type: TypeMess,
         data: &[u8],
     ) -> CreateMCUFrameMessageResult {
-        info!(
-            "TUNT create_mcu_frame_message: baudrate_mhz: {}, mess_type: {}, data: {}, spidev_path: {}",
-            self.baudrate_mhz, self.sleep_us, self.retry_quota, self.spidev_path
-        );
+        // info!(
+        //     "TUNT create_mcu_frame_message: baudrate_mhz: {}, mess_type: {}, data: {}, spidev_path: {}",
+        //     self.baudrate_mhz, self.sleep_us, self.retry_quota, self.spidev_path
+        // );
 
         // 1. Xác định độ dài tối đa cho phép
         let max_data_length = match mess_type {
@@ -176,7 +179,7 @@ impl ConnectionSpidev {
             thread::sleep(Duration::from_micros(self.sleep_us));
             count_read_fail += 1;
 
-            info!("SPI/MCU: read failed {} time(s)", count_read_fail);
+            // info!("SPI/MCU: read failed {} time(s)", count_read_fail);
         }
 
         // 6. Xử lý kết quả cuối cùng

@@ -474,7 +474,7 @@ extern "C" fn pc_observer_EncryptMedia<T>(
 where
     T: PeerConnectionObserverTrait,
 {
-    info!("pc_observer_EncryptMedia(): called for track_id: {:?}", plaintext);
+    // info!("pc_observer_EncryptMedia(): called for track_id: {:?}", plaintext);
 
     if plaintext.is_null() || ciphertext_out.is_null() || ciphertext_size_out.is_null() {
         error!("nulls passed into pc_observer_EncryptMedia");
