@@ -26,8 +26,8 @@ docker exec -it ringrtc bash -c "
 "
 
 docker exec -it ringrtc bash -c "
-    bin/build-aar -a arm64 -d --webrtc-only --archive-webrtc
-    bin/build-aar -a arm64 -d --ringrtc-only
+    bin/build-aar -a arm64 x64 -d -r --webrtc-only --archive-webrtc
+    bin/build-aar -a arm64 x64 -d -r --ringrtc-only
 "
 
 docker exec -it ringrtc bash -c "

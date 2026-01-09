@@ -2241,8 +2241,8 @@ where
     // const FRAME_ENCRYPTION_FOOTER_LEN: usize = size_of::<frame_crypto::RatchetCounter>()
     //     + size_of::<u32>()
     //     + size_of::<frame_crypto::Mac>();
-
-    const FRAME_ENCRYPTION_HEADER_LEN: usize = size_of::<frame_crypto::E164>();
+    //
+    // const FRAME_ENCRYPTION_HEADER_LEN: usize = size_of::<frame_crypto::E164>();
 
     // Called by WebRTC through PeerConnectionObserver
     // See comment on FRAME_ENCRYPTION_FOOTER_LEN for more details on the format
@@ -2259,245 +2259,137 @@ where
         ciphertext_size
     }
 
+    // use this block to debug [u8]
+    // debug!(
+    //     "encrypt_media_impl (DEBUG): sending mcu_message: {:?}",
+    //     mcu_message
+    //         .iter()
+    //         .map(|b| format!("{:02X}", b))
+    //         .collect::<Vec<_>>()
+    //         .join(" ")
+    // );
     fn encrypt_media_impl(&self, plaintext: &[u8], ciphertext_buffer: &mut [u8]) -> Result<usize> {
-        // debug!(
-        //     "encrypt_media_impl (DEBUG): plaintext: {}, {}, {}",
-        //     plaintext.len(),
-        //     ciphertext_buffer.len(),
-        //     plaintext
-        //         .iter()
-        //         .map(|b| format!("{:02X}", b))
-        //         .collect::<Vec<_>>()
-        //         .join(" ")
-        // );
-
-        // let ciphertext_size = Self::get_ciphertext_buffer_size(plaintext.len());
         let mut ciphertext = Writer::new(ciphertext_buffer);
 
-        // Thử 1 số điện thoại mặc định
-        // let e164: frame_crypto::E164 = *b"+84984999999";
-        // ciphertext.write_slice(&e164)?;
-        // let encrypted_payload = ciphertext.write_slice(plaintext)?;
-
-        let mess_type = if self.direction() == CallDirection::Outgoing {
-            TypeMess::CallerEncrypt
-        } else {
-            TypeMess::CalleeEncrypt
-        };
-
         let mcu_config = &self.call_config.mcu_config;
+        if mcu_config.enable {
+            let mess_type = if self.direction() == CallDirection::Outgoing {
+                TypeMess::CallerEncrypt
+            } else {
+                TypeMess::CalleeEncrypt
+            };
 
-        let sc = ConnectionSpidev::new(
-            mcu_config.baudrate,
-            mcu_config.sleep_us,
-            mcu_config.retry_quota,
-            &mcu_config.spidev_path,
-        );
-        // let mcu_message = sc.create_mcu_frame_message(mess_type, encrypted_payload);
-        // let formatted_mcu_message_string = format!("{:?}", mcu_message.ok().unwrap());
+            let sc = ConnectionSpidev::new(
+                mcu_config.baudrate,
+                mcu_config.sleep_us,
+                mcu_config.retry_quota,
+                &mcu_config.spidev_path,
+            );
 
-        // gửi borrowed của encrypted_payload đi để encrypt với MCU
+            let max_len = crate::mcu::connection_spidev::MAX_DATA_LENGTH_PER_ENCRYPT_FRAME;
+            for chunk in plaintext.chunks(max_len) {
+                let mcu_message = sc
+                    .create_mcu_frame_message(mess_type, chunk)
+                    .map_err(|_| RingRtcError::FailedToEncrypt)?;
 
-        let max_len = crate::mcu::connection_spidev::MAX_DATA_LENGTH_PER_ENCRYPT_FRAME;
+                let mcu_response = sc
+                    .send_message_to_mcu(mcu_message)
+                    .map_err(|_| RingRtcError::FailedToEncrypt)?;
 
-        for chunk in plaintext.chunks(max_len) {
-            let mcu_message = sc
-                .create_mcu_frame_message(mess_type, chunk)
-                .map_err(|e| RingRtcError::FailedToEncrypt)?;
+                if mcu_response.get(0) != Some(&crate::mcu::connection_spidev::MCU_FIRST_FRAME_DATA)
+                {
+                    // Invalid MCU response frame
+                    return Err(RingRtcError::FailedToEncrypt.into());
+                }
+                if mcu_response.len() < 5 {
+                    // MCU response too short
+                    return Err(RingRtcError::FailedToEncrypt.into());
+                }
+                let payload_len_bytes = &mcu_response[3..5];
+                let payload_len =
+                    u16::from_be_bytes(payload_len_bytes.try_into().unwrap_or([0, 0])) as usize;
+                if mcu_response.len() < 8 + payload_len {
+                    // MCU response data incomplete
+                    return Err(RingRtcError::FailedToEncrypt.into());
+                }
+                let encrypted_data = &mcu_response[8..8 + payload_len];
 
-            // debug!(
-            //     "encrypt_media_impl (DEBUG): sending mcu_message: {:?}",
-            //     mcu_message
-            //         .iter()
-            //         .map(|b| format!("{:02X}", b))
-            //         .collect::<Vec<_>>()
-            //         .join(" ")
-            // );
-
-            let mcu_response = sc
-                .send_message_to_mcu(mcu_message)
-                .map_err(|e| RingRtcError::FailedToEncrypt)?;
-
-            // debug!(
-            //     "encrypt_media_impl (DEBUG): receive mcu_message: {:?}",
-            //     mcu_response
-            //         .iter()
-            //         .map(|b| format!("{:02X}", b))
-            //         .collect::<Vec<_>>()
-            //         .join(" ")
-            // );
-
-            if mcu_response.get(0) != Some(&crate::mcu::connection_spidev::MCU_FIRST_FRAME_DATA) {
-                debug!("Invalid MCU response frame");
-                return Err(RingRtcError::FailedToEncrypt.into());
+                // Write Length (2 bytes)
+                ciphertext.write_slice(payload_len_bytes)?;
+                // Write Data (payload_len bytes)
+                ciphertext.write_slice(encrypted_data)?;
             }
 
-            if mcu_response.len() < 5 {
-                debug!("MCU response too short");
-                return Err(RingRtcError::FailedToEncrypt.into());
-            }
-            let payload_len_bytes = &mcu_response[3..5];
-            let payload_len =
-                u16::from_be_bytes(payload_len_bytes.try_into().unwrap_or([0, 0])) as usize;
-            if mcu_response.len() < 8 + payload_len {
-                debug!("MCU response data incomplete");
-                return Err(RingRtcError::FailedToEncrypt.into());
-            }
-            let encrypted_data = &mcu_response[8..8 + payload_len];
+            Ok(ciphertext.offset)
+        } else {
+            // Tạm thời chỉ sao chép dữ liệu để kiểm tra, không mã hoá
+            let no_encrypt_payload = ciphertext.write_slice(plaintext)?;
 
-            // debug!(
-            //     "encrypt_media_impl (DEBUG): payload_len | encrypted_data: {:?} | {:?}",
-            //     payload_len,
-            //     encrypted_data
-            //         .iter()
-            //         .map(|b| format!("{:02X}", b))
-            //         .collect::<Vec<_>>()
-            //         .join(" ")
-            // );
-
-            // Write Length (2 bytes)
-            ciphertext.write_slice(payload_len_bytes)?;
-            // Write Data (payload_len bytes)
-            ciphertext.write_slice(encrypted_data)?;
+            Ok(no_encrypt_payload.len())
         }
-
-        // Log dữ liệu plaintext_buffer
-        let total_len = ciphertext.offset;
-        let formatted_string = format!(
-            "{:?}",
-            &ciphertext_buffer[..total_len]
-                .iter()
-                .map(|b| format!("{:02X}", b))
-                .collect::<Vec<_>>()
-                .join(" ")
-        );
-        // debug!(
-        //     "encrypt_media_impl (DEBUG): ciphertext: {}, {}",
-        //     total_len,
-        //     formatted_string
-        // );
-
-        Ok(total_len)
     }
 
     fn decrypt_media_impl(&self, ciphertext: &[u8], plaintext_buffer: &mut [u8]) -> Result<usize> {
-        // Tạm thời chỉ sao chép dữ liệu để kiểm tra, không giải mã
-        // let mut ciphertext = Reader::new(ciphertext);
-        // let mut plaintext = Writer::new(plaintext_buffer);
-        // let e164: frame_crypto::E164 = ciphertext
-        //     .read_slice_from_start(size_of::<frame_crypto::E164>())?
-        //     .try_into()?;
-        // Allow for in-place decryption from ciphertext to plaintext_buffer by using
-        // the write_slice that supports overlapping copies.
-        // let encrypted_payload = plaintext.write_slice_overlapping(ciphertext.remaining())?;
-
-        // gửi borrowed của encrypted_payload đi để decrypt với MCU
-        // TODO: gọi connection_spidev ở đây
-        // (1) create_mcu_frame_message với encypted_payload
-        // (2) send_message_to_mcu với message đã tạo từ (1) và replaced vào encrypted_payload
-        // let mcu_config = &self.call_config.mcu_config;
-        // let sc = ConnectionSpidev::new(mcu_config.baudrate, mcu_config.sleep_us, mcu_config.retry_quota, &mcu_config.spidev_path);
-        // let mcu_message = sc.create_mcu_frame_message(mess_type, encrypted_payload);
-        // let formatted_mcu_message_string = format!("{:?}", mcu_message.ok().unwrap());
-        // debug!(
-        //     "decrypt_media_impl (DEBUG): mcu_message: {}",
-        //     formatted_mcu_message_string
-        // );
-
-        // debug!(
-        //     "decrypt_media_impl (DEBUG): ciphertext: {}, {}, {}",
-        //     ciphertext.len(),
-        //     plaintext_buffer.len(),
-        //     ciphertext
-        //         .iter()
-        //         .map(|b| format!("{:02X}", b))
-        //         .collect::<Vec<_>>()
-        //         .join(" ")
-        // );
-
         let mut ciphertext = Reader::new(ciphertext);
         let mut plaintext = Writer::new(plaintext_buffer);
 
-        let mess_type = if self.direction() == CallDirection::Outgoing {
-            TypeMess::CallerDecrypt
-        } else {
-            TypeMess::CalleeDecrypt
-        };
-
         let mcu_config = &self.call_config.mcu_config;
-        let sc = ConnectionSpidev::new(
-            mcu_config.baudrate,
-            mcu_config.sleep_us,
-            mcu_config.retry_quota,
-            &mcu_config.spidev_path,
-        );
+        if mcu_config.enable {
+            plaintext.write_slice_overlapping(ciphertext.remaining())?;
 
-        while ciphertext.remaining().len() > 0 {
-            let len = ciphertext.read_u16_from_start()? as usize;
-            let chunk_data = ciphertext.read_slice_from_start(len)?;
+            let mess_type = if self.direction() == CallDirection::Outgoing {
+                TypeMess::CallerDecrypt
+            } else {
+                TypeMess::CalleeDecrypt
+            };
 
-            let mcu_message = sc
-                .create_mcu_frame_message(mess_type, chunk_data)
-                .map_err(|e| RingRtcError::FailedToDecrypt)?;
+            let sc = ConnectionSpidev::new(
+                mcu_config.baudrate,
+                mcu_config.sleep_us,
+                mcu_config.retry_quota,
+                &mcu_config.spidev_path,
+            );
 
-            // debug!(
-            //     "decrypt_media_impl (DEBUG): sending mcu_message: {}",
-            //     mcu_message
-            //         .iter()
-            //         .map(|b| format!("{:02X}", b))
-            //         .collect::<Vec<_>>()
-            //         .join(" ")
-            // );
+            while ciphertext.remaining().len() > 0 {
+                let len = ciphertext.read_u16_from_start()? as usize;
+                let chunk_data = ciphertext.read_slice_from_start(len)?;
 
-            let mcu_response = sc
-                .send_message_to_mcu(mcu_message)
-                .map_err(|e| RingRtcError::FailedToDecrypt)?;
+                let mcu_message = sc
+                    .create_mcu_frame_message(mess_type, chunk_data)
+                    .map_err(|_| RingRtcError::FailedToDecrypt)?;
 
-            if mcu_response.get(0) != Some(&crate::mcu::connection_spidev::MCU_FIRST_FRAME_DATA) {
-                return Err(RingRtcError::FailedToDecrypt.into());
+                let mcu_response = sc
+                    .send_message_to_mcu(mcu_message)
+                    .map_err(|_| RingRtcError::FailedToDecrypt)?;
+
+                if mcu_response.get(0) != Some(&crate::mcu::connection_spidev::MCU_FIRST_FRAME_DATA)
+                {
+                    return Err(RingRtcError::FailedToDecrypt.into());
+                }
+
+                if mcu_response.len() < 5 {
+                    return Err(RingRtcError::FailedToDecrypt.into());
+                }
+
+                let payload_len_bytes = &mcu_response[3..5];
+                let payload_len =
+                    u16::from_be_bytes(payload_len_bytes.try_into().unwrap_or([0, 0])) as usize;
+                if mcu_response.len() < 8 + payload_len {
+                    return Err(RingRtcError::FailedToDecrypt.into());
+                }
+                // bỏ thêm 4 bytes đâù của data đi
+                let decrypted_data = &mcu_response[12..8 + payload_len];
+
+                plaintext.write_slice(decrypted_data)?;
             }
 
-            if mcu_response.len() < 5 {
-                return Err(RingRtcError::FailedToDecrypt.into());
-            }
+            Ok(plaintext.offset)
+        } else {
+            // Tạm thời chỉ sao chép dữ liệu để kiểm tra, không giải mã
+            let no_encrypt_payload = plaintext.write_slice_overlapping(ciphertext.remaining())?;
 
-            // debug!(
-            //     "decrypt_media_impl (DEBUG): mcu_response: {}",
-            //     mcu_response
-            //         .iter()
-            //         .map(|b| format!("{:02X}", b))
-            //         .collect::<Vec<_>>()
-            //         .join(" ")
-            // );
-
-            let payload_len_bytes = &mcu_response[3..5];
-            let payload_len =
-                u16::from_be_bytes(payload_len_bytes.try_into().unwrap_or([0, 0])) as usize;
-            if mcu_response.len() < 8 + payload_len {
-                return Err(RingRtcError::FailedToDecrypt.into());
-            }
-            // bỏ thêm 4 bytes đâù của data đi
-            let decrypted_data = &mcu_response[12..8 + payload_len];
-
-            plaintext.write_slice(decrypted_data)?;
+            Ok(no_encrypt_payload.len())
         }
-
-        // Log dữ liệu plaintext_buffer
-        let total_len = plaintext.offset;
-        let formatted_string = format!(
-            "{:?}",
-            &plaintext_buffer[..total_len]
-                .iter()
-                .map(|b| format!("{:02X}", b))
-                .collect::<Vec<_>>()
-                .join(" ")
-        );
-        // debug!(
-        //     "decrypt_media_impl (DEBUG): plaintext: {}, {}",
-        //     total_len, formatted_string
-        // );
-
-        Ok(total_len)
     }
 }
 
@@ -2643,6 +2535,7 @@ impl<'buf> Writer<'buf> {
         self.buf.len() - self.offset
     }
 
+    #[allow(dead_code)]
     fn write_u8(&mut self, input: u8) -> Result<()> {
         if self.remaining_len() < 1 {
             return Err(RingRtcError::BufferTooSmall.into());
@@ -2652,11 +2545,13 @@ impl<'buf> Writer<'buf> {
         Ok(())
     }
 
+    #[allow(dead_code)]
     fn write_u16(&mut self, input: u16) -> Result<()> {
         self.write_slice(&input.to_be_bytes())?;
         Ok(())
     }
 
+    #[allow(dead_code)]
     fn write_u32(&mut self, input: u32) -> Result<()> {
         self.write_slice(&input.to_be_bytes())?;
         Ok(())
@@ -2674,6 +2569,7 @@ impl<'buf> Writer<'buf> {
         Ok(output)
     }
 
+    #[allow(dead_code)]
     fn write_slice_overlapping(&mut self, input: &[u8]) -> Result<&mut [u8]> {
         if self.remaining_len() < input.len() {
             return Err(RingRtcError::BufferTooSmall.into());
@@ -2706,27 +2602,38 @@ impl<'data> Reader<'data> {
         self.data
     }
 
-    // fn read_u8_from_end(&mut self) -> Result<u8> {
-    //     let (last, rest) = self.data.split_last().ok_or(RingRtcError::BufferTooSmall)?;
-    //     self.data = rest;
-    //     Ok(*last)
-    // }
+    #[allow(dead_code)]
+    fn read_u8_from_end(&mut self) -> Result<u8> {
+        let (last, rest) = self.data.split_last().ok_or(RingRtcError::BufferTooSmall)?;
+        self.data = rest;
+        Ok(*last)
+    }
 
-    // fn read_u32_from_end(&mut self) -> Result<u32> {
-    //     Ok(u32::from_be_bytes(
-    //         self.read_slice_from_end(size_of::<u32>())?.try_into()?,
-    //     ))
-    // }
+    #[allow(dead_code)]
+    fn read_u16_from_end(&mut self) -> Result<u16> {
+        Ok(u16::from_be_bytes(
+            self.read_slice_from_end(size_of::<u16>())?.try_into()?,
+        ))
+    }
 
-    // fn read_slice_from_end(&mut self, len: usize) -> Result<&'data [u8]> {
-    //     if len > self.data.len() {
-    //         return Err(RingRtcError::BufferTooSmall.into());
-    //     }
-    //     let (rest, read) = self.data.split_at(self.data.len() - len);
-    //     self.data = rest;
-    //     Ok(read)
-    // }
+    #[allow(dead_code)]
+    fn read_u32_from_end(&mut self) -> Result<u32> {
+        Ok(u32::from_be_bytes(
+            self.read_slice_from_end(size_of::<u32>())?.try_into()?,
+        ))
+    }
 
+    #[allow(dead_code)]
+    fn read_slice_from_end(&mut self, len: usize) -> Result<&'data [u8]> {
+        if len > self.data.len() {
+            return Err(RingRtcError::BufferTooSmall.into());
+        }
+        let (rest, read) = self.data.split_at(self.data.len() - len);
+        self.data = rest;
+        Ok(read)
+    }
+
+    #[allow(dead_code)]
     fn read_u8_from_start(&mut self) -> Result<u8> {
         let (first, rest) = self
             .data
@@ -2736,18 +2643,21 @@ impl<'data> Reader<'data> {
         Ok(*first)
     }
 
+    #[allow(dead_code)]
     fn read_u16_from_start(&mut self) -> Result<u16> {
         Ok(u16::from_be_bytes(
             self.read_slice_from_start(size_of::<u16>())?.try_into()?,
         ))
     }
 
+    #[allow(dead_code)]
     fn read_u32_from_start(&mut self) -> Result<u32> {
         Ok(u32::from_be_bytes(
             self.read_slice_from_start(size_of::<u32>())?.try_into()?,
         ))
     }
 
+    #[allow(dead_code)]
     fn read_slice_from_start(&mut self, len: usize) -> Result<&'data [u8]> {
         if len > self.data.len() {
             return Err(RingRtcError::BufferTooSmall.into());

@@ -212,6 +212,7 @@ pub fn proceed(
 
     const LONG_TYPE: &str = jni_signature!(long);
     const INT_TYPE: &str = jni_signature!(int);
+    const BOOLEAN_TYPE: &str = jni_signature!(boolean);
     const STRING_TYPE: &str = jni_signature!(java.lang.String);
 
     const BAUDRATE_FIELD: &str = "baudrate";
@@ -242,11 +243,17 @@ pub fn proceed(
         String::new() 
     };
 
+    const ENABLE_FIELD: &str = "enable";
+    let enable =
+            jni_get_field(env, &jni_mcu_config, ENABLE_FIELD, BOOLEAN_TYPE)?.z()?;
+    let enable = enable as bool;
+
     let mcu_config = McuConfig {
         baudrate,
         sleep_us,
         retry_quota,
         spidev_path,
+        enable,
     };
     let call_config = call_config.with_mcu_config(mcu_config);
 

@@ -12,12 +12,14 @@ public class McuConfig {
   public long sleepUs;
   public int retryQuota;
   public String spidevPath;
+  public boolean enable;
 
   public McuConfig() {
     this.baudrate = 10;
     this.sleepUs = 1000;
     this.retryQuota = 10;
     this.spidevPath = "/dev/spidev0.0";
+    this.enable = false;
   }
 
   @Override
@@ -27,6 +29,7 @@ public class McuConfig {
            ", sleepUs=" + sleepUs +
            ", retryQuota=" + retryQuota +
            ", spidevPath=" + spidevPath +
+           ", enable=" + enable +
            "}";
   }
 
@@ -38,11 +41,12 @@ public class McuConfig {
     return baudrate == that.baudrate &&
            sleepUs == that.sleepUs &&
            retryQuota == that.retryQuota &&
-           spidevPath == that.spidevPath;
+           spidevPath == that.spidevPath &&
+           enable == that.enable;
   }
 
   @Override
   public int hashCode() {
-    return Objects.hash(baudrate, sleepUs, retryQuota, spidevPath);
+    return Objects.hash(baudrate, sleepUs, retryQuota, spidevPath, enable);
   }
 }

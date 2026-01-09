@@ -199,6 +199,7 @@ pub struct McuConfig {
     pub sleep_us: u64,
     pub retry_quota: u8,
     pub spidev_path: String,
+    pub enable: bool,
 }
 
 impl Default for McuConfig {
@@ -208,6 +209,7 @@ impl Default for McuConfig {
             sleep_us: 1500,
             retry_quota: 10,
             spidev_path: "/dev/spidev0.0".to_string(),
+            enable: false,
         }
     }
 }
