@@ -22,7 +22,7 @@ bin/build-aar -a arm64 -d --ringrtc-only
 bin/build-aar -a arm64 -d -r --ringrtc-only
 
 docker exec -it ringrtc bash -c "
-    bin/build-aar -a arm64 x64 -d --ringrtc-only
+    bin/build-aar -a arm64 x64 -d -r --ringrtc-only
 "
 
 docker exec -it ringrtc bash -c "

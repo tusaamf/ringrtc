@@ -543,7 +543,7 @@ extern "C" fn pc_observer_DecryptMedia<T>(
 where
     T: PeerConnectionObserverTrait,
 {
-    info!("pc_observer_DecryptMedia(): called for track_id: {:?}", ciphertext);
+    // info!("pc_observer_DecryptMedia(): called for track_id: {:?}", ciphertext);
 
     if ciphertext.is_null() || plaintext_out.is_null() || plaintext_size_out.is_null() {
         return false;
