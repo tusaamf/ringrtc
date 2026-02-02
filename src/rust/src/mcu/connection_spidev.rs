@@ -1,5 +1,12 @@
 use spidev::{SpiModeFlags, Spidev, SpidevOptions, SpidevTransfer};
-use std::{io, thread, time::Duration};
+use std::{
+    io,
+    sync::{Arc, Mutex},
+    thread,
+    time::Duration,
+};
+
+use lazy_static::lazy_static;
 
 use crate::webrtc::peer_connection_factory::McuConfig;
 
@@ -22,6 +29,88 @@ pub enum TypeMess {
     CalleeDecrypt = 0x84,
 }
 
+#[derive(Debug)]
+pub struct MCUFrame {
+    pub sof: u8,
+    // pub frame_id: u16,
+    pub data_len_bytes: Vec<u8>,
+    pub data_len: u16,
+    pub msg_type: u8,
+    // pub header_crc: u16,
+    pub data: Vec<u8>,
+    // pub data_crc: u16,
+}
+
+impl MCUFrame {
+    pub fn parse(buf: Vec<u8>) -> Result<Self, &'static str> {
+        if buf.len() < 10 {
+            return Err("Buffer too short");
+        }
+
+        let sof = buf[0];
+
+        // Kiểm tra SOF
+        if sof != MCU_FIRST_FRAME_DATA {
+            return Err("Invalid SOF");
+        }
+
+        // let data_len_bytes = [buf[3], buf[4]];
+        let data_len_bytes = buf[3..5].to_vec();
+        // let data_len_bytes = [buf[3], buf[4]];
+        // let frame_id = u16::from_be_bytes([buf[1], buf[2]]);
+        let data_len = u16::from_be_bytes([buf[3], buf[4]]);
+        let msg_type = buf[5];
+        // let header_crc = u16::from_be_bytes([buf[6], buf[7]]);
+
+        // let payload_len = data_len as usize;
+        let data_start = 8;
+        let data_end = data_start + (data_len as usize);
+
+        if buf.len() < data_end + 2 {
+            return Err("Invalid data length");
+        }
+
+        // LẤY OWNERSHIP DATA
+        let data = buf[data_start..data_end].to_vec();
+
+        // let data_crc = u16::from_be_bytes([
+        //     buf[data_end],
+        //     buf[data_end + 1],
+        // ]);
+
+        Ok(Self {
+            sof,
+            // frame_id,
+            data_len_bytes,
+            data_len,
+            msg_type,
+            // header_crc,
+            data,
+            // data_crc,
+        })
+    }
+
+    pub fn get_sof(&self) -> u8 {
+        self.sof
+    }
+
+    pub fn get_data_len_bytes(&self) -> &[u8] {
+        &self.data_len_bytes
+    }
+
+    pub fn get_data_len(&self) -> u16 {
+        self.data_len
+    }
+
+    pub fn get_data(&self, trim_data: bool) -> &[u8] {
+        if trim_data && self.data.len() >= 4 && self.data[0..4] == [0x00, 0x00, 0x00, 0x01] {
+            &self.data[4..]
+        } else {
+            &self.data
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum CreateMCUFrameMessageError {
     None,
@@ -29,6 +118,12 @@ pub enum CreateMCUFrameMessageError {
 }
 
 pub type CreateMCUFrameMessageResult = Result<Vec<u8>, CreateMCUFrameMessageError>;
+
+lazy_static! {
+    static ref MCU_SPI_MUTEX: Mutex<()> = Mutex::new(());
+    /// Global cache for ConnectionSpidev to reuse SPI device and avoid repeated open/configure overhead
+    static ref MCU_SPI_DEVICE_CACHE: Mutex<Option<ConnectionSpidev>> = Mutex::new(None);
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ConnectionSpidevError {
@@ -42,11 +137,15 @@ pub enum ConnectionSpidevError {
 
 pub type SendMessageToMCUResult = Result<Vec<u8>, ConnectionSpidevError>;
 
+#[derive(Clone)]
 pub struct ConnectionSpidev {
     baudrate_mhz: u8,
     sleep_us: u64,
     retry_quota: u8,
     spidev_path: String,
+    inter_message_delay_us: u64,
+    // Cached SPI device to avoid repeated open/configure overhead
+    spi_device: Arc<Mutex<Option<Spidev>>>,
 }
 
 impl ConnectionSpidev {
@@ -56,16 +155,45 @@ impl ConnectionSpidev {
             sleep_us: sleep,
             retry_quota: quota,
             spidev_path: path.to_string(),
+            inter_message_delay_us: 500,
+            spi_device: Arc::new(Mutex::new(None)),
         }
     }
 
     pub fn from_config(config: &McuConfig) -> Self {
-        Self::new(
-            config.baudrate,
-            config.sleep_us,
-            config.retry_quota,
-            &config.spidev_path,
-        )
+        Self {
+            baudrate_mhz: config.baudrate,
+            sleep_us: config.sleep_us,
+            retry_quota: config.retry_quota,
+            spidev_path: config.spidev_path.clone(),
+            inter_message_delay_us: 500,
+            spi_device: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    /// Get or create a cached ConnectionSpidev instance from config
+    pub fn get_or_create_cached(config: &McuConfig) -> Result<Self, ConnectionSpidevError> {
+        let mut cache = MCU_SPI_DEVICE_CACHE
+            .lock()
+            .map_err(|_| ConnectionSpidevError::SPIOpenFailed)?;
+
+        // Check if we have a cached instance with the same config
+        if let Some(cached) = cache.as_ref() {
+            // Verify it matches the current config
+            if cached.baudrate_mhz == config.baudrate
+                && cached.spidev_path == config.spidev_path
+                && cached.sleep_us == config.sleep_us
+                && cached.retry_quota == config.retry_quota
+            {
+                // Return a cloned instance (cheaper than creating new)
+                return Ok(cached.clone());
+            }
+        }
+
+        // Create new instance and cache it
+        let new_instance = Self::from_config(config);
+        *cache = Some(new_instance.clone());
+        Ok(new_instance)
     }
 
     pub fn create_mcu_frame_message(
@@ -137,15 +265,33 @@ impl ConnectionSpidev {
     }
 
     pub fn send_message_to_mcu(&self, buffer: Vec<u8>) -> SendMessageToMCUResult {
+        // Lock to ensure sequential access to the MCU
+        let _guard = MCU_SPI_MUTEX
+            .lock()
+            .map_err(|_| ConnectionSpidevError::SPIOpenFailed)?;
+
         // 1. Kiểm tra độ dài buffer đầu vào (phải <= 256)
         if buffer.len() > SPIDEV_BUFFER_SIZE {
             return Err(ConnectionSpidevError::InvalidBufferData);
         }
 
-        // 2. Khởi tạo và cấu hình thiết bị SPI
-        let spi = self
-            .create_spi()
+        // 2. Get or create SPI device (reuse cached device)
+        let mut spi_cache = self
+            .spi_device
+            .lock()
             .map_err(|_| ConnectionSpidevError::SPIOpenFailed)?;
+
+        if spi_cache.is_none() {
+            // First time: create and cache the device
+            *spi_cache = Some(
+                self.create_spi()
+                    .map_err(|_| ConnectionSpidevError::SPIOpenFailed)?,
+            );
+        }
+
+        let spi = spi_cache
+            .as_mut()
+            .ok_or(ConnectionSpidevError::SPIOpenFailed)?;
 
         let mut count_read_fail = 0;
         let mut success = false;
@@ -184,6 +330,10 @@ impl ConnectionSpidev {
 
         // 6. Xử lý kết quả cuối cùng
         if success {
+            // Apply inter-message delay if configured to ensure MCU has time to process
+            if self.inter_message_delay_us > 0 {
+                thread::sleep(Duration::from_micros(self.inter_message_delay_us));
+            }
             Ok(rx.to_vec()) // Trả về vector dữ liệu nếu thành công
         } else {
             Err(ConnectionSpidevError::MaxRetryExceeded) // Trả về lỗi nếu quá số lần thử

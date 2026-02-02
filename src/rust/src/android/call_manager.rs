@@ -248,12 +248,18 @@ pub fn proceed(
             jni_get_field(env, &jni_mcu_config, ENABLE_FIELD, BOOLEAN_TYPE)?.z()?;
     let enable = enable as bool;
 
+    const DEBUG_FIELD: &str = "debug";
+    let debug =
+            jni_get_field(env, &jni_mcu_config, DEBUG_FIELD, BOOLEAN_TYPE)?.z()?;
+    let debug = debug as bool;
+
     let mcu_config = McuConfig {
         baudrate,
         sleep_us,
         retry_quota,
         spidev_path,
         enable,
+        debug,
     };
     let call_config = call_config.with_mcu_config(mcu_config);
 
