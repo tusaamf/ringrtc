@@ -61,6 +61,9 @@ public class CallManager {
   @NonNull
   private Observer                            observer;
 
+  @NonNull
+  private McuConfig                           mcuConfig;
+
   // Keep a hash/mapping of a callId to a GroupCall object. CallId is a u32
   // and will fit in to the long type.
   @NonNull
@@ -263,10 +266,11 @@ public class CallManager {
     }
   }
 
-  CallManager(@NonNull Observer observer) {
+  CallManager(@NonNull Observer observer, @NonNull McuConfig mcuConfig) {
     Log.i(TAG, "CallManager():");
 
     this.observer            = observer;
+    this.mcuConfig           = mcuConfig;
     this.nativeCallManager   = 0;
     this.groupCallByClientId = new LongSparseArray<>();
     this.peekRequests        = new Requests<>();
@@ -275,13 +279,13 @@ public class CallManager {
   }
 
   @Nullable
-  public static CallManager createCallManager(@NonNull Observer observer)
+  public static CallManager createCallManager(@NonNull Observer observer, @NonNull McuConfig mcuConfig)
     throws CallException
   {
     Log.i(TAG, "createCallManager():");
     checkInitializeHasBeenCalled();
 
-    CallManager callManager = new CallManager(observer);
+    CallManager callManager = new CallManager(observer, mcuConfig);
 
     long nativeCallManager = ringrtcCreateCallManager(callManager);
     if (nativeCallManager != 0) {
@@ -391,8 +395,7 @@ public class CallManager {
                                 boolean                        hideIp,
                                 DataMode                       dataMode,
                       @Nullable Integer                        audioLevelsIntervalMs,
-                                boolean                        enableCamera,
-                      @NonNull  McuConfig                      mcuConfig)
+                                boolean                        enableCamera)
     throws CallException
   {
     checkCallManagerExists();
@@ -1352,7 +1355,8 @@ public class CallManager {
       long nativePeerConnection = ringrtcCreatePeerConnection(factory.getNativeOwnedFactoryAndThreads(),
                                                               nativeConnectionBorrowed,
                                                               configuration,
-                                                              constraints);
+                                                              constraints,
+                                                              mcuConfig);
       if (nativePeerConnection == 0) {
         Log.w(TAG, "Unable to create native PeerConnection.");
         return null;
@@ -2434,7 +2438,8 @@ public class CallManager {
     long ringrtcCreatePeerConnection(long                            nativePeerConnectionFactory,
                                      long                            nativeConnection,
                                      PeerConnection.RTCConfiguration rtcConfig,
-                                     MediaConstraints                constraints)
+                                     MediaConstraints                constraints,
+                                     McuConfig                       mcuConfig)
     throws CallException;
 
   private native

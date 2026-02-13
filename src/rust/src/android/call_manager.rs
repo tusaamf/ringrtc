@@ -104,8 +104,14 @@ pub fn create_peer_connection(
     mut native_connection: webrtc::ptr::Borrowed<Connection<AndroidPlatform>>,
     jni_rtc_config: JObject,
     jni_media_constraints: JObject,
+    jni_mcu_config: JObject,
 ) -> Result<jlong> {
-    // TUNT, add set_stream_ids like group call
+    const BOOLEAN_TYPE: &str = jni_signature!(boolean);
+    const ENABLE_FIELD: &str = "enable";
+    let enable =
+            jni_get_field(env, &jni_mcu_config, ENABLE_FIELD, BOOLEAN_TYPE)?.z()?;
+    let enable = enable as bool;
+
     // let local_demux_id = unsafe { native_connection.as_ref() }.unwrap().local_demux_id();
     let connection = unsafe { native_connection.as_mut() }.ok_or_else(|| {
         RingRtcError::NullPointer(
@@ -116,11 +122,13 @@ pub fn create_peer_connection(
 
     let connection_ptr = connection.get_connection_ptr()?;
 
+    info!("create_peer_connection: enable_frame_encryption={}", enable);
+
     // native_connection is an un-boxed Connection<AndroidPlatform> on the heap.
     // pass ownership of it to the PeerConnectionObserver.
     let pc_observer = PeerConnectionObserver::new(
         connection_ptr,
-        true,  /* enable_frame_encryption */
+        enable,  /* enable_frame_encryption */
         false, /* enable_video_frame_event */
         false, /* enable_video_frame_content */
     )?;

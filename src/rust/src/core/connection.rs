@@ -656,6 +656,10 @@ where
 
             // We have to do this before we pass ownership of offer_sdi into set_local_description.
             let (local_secret, local_public_key) = generate_local_secret_and_public_key()?;
+
+            // let mcu_config = &self.call_config.mcu_config;
+            // let public_key = if mcu_config.enable { local_public_key.as_bytes().to_vec() } else { Vec::new() };
+
             let v4_offer = offer.to_v4(
                 local_public_key.as_bytes().to_vec(),
                 &self.call_config,
@@ -919,6 +923,9 @@ where
             }
 
             let answer_to_send = if v4_offer.is_some() {
+                // let mcu_config = &self.call_config.mcu_config;
+                // let public_key = if mcu_config.enable { local_public_key.as_bytes().to_vec() } else { Vec::new() };
+
                 let v4_answer = answer.to_v4(
                     local_public_key.as_bytes().to_vec(),
                     &self.call_config,
