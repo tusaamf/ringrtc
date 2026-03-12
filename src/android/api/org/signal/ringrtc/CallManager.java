@@ -26,6 +26,7 @@ import org.webrtc.MediaStream;
 import org.webrtc.NativeLibraryLoader;
 import org.webrtc.PeerConnection;
 import org.webrtc.RtpSender;
+import org.webrtc.SSLCertificateVerifier;
 import org.webrtc.PeerConnectionFactory;
 import org.webrtc.VideoDecoderFactory;
 import org.webrtc.VideoEncoderFactory;
@@ -63,6 +64,9 @@ public class CallManager {
 
   @NonNull
   private McuConfig                           mcuConfig;
+
+  @Nullable
+  private SSLCertificateVerifier              sslCertificateVerifier;
 
   // Keep a hash/mapping of a callId to a GroupCall object. CallId is a u32
   // and will fit in to the long type.
@@ -266,26 +270,27 @@ public class CallManager {
     }
   }
 
-  CallManager(@NonNull Observer observer, @NonNull McuConfig mcuConfig) {
+  CallManager(@NonNull Observer observer, @NonNull McuConfig mcuConfig, @Nullable SSLCertificateVerifier sslCertificateVerifier) {
     Log.i(TAG, "CallManager():");
 
-    this.observer            = observer;
-    this.mcuConfig           = mcuConfig;
-    this.nativeCallManager   = 0;
-    this.groupCallByClientId = new LongSparseArray<>();
-    this.peekRequests        = new Requests<>();
-    this.callLinkRequests    = new Requests<>();
-    this.emptyRequests       = new Requests<>();
+    this.observer               = observer;
+    this.mcuConfig              = mcuConfig;
+    this.sslCertificateVerifier = sslCertificateVerifier;
+    this.nativeCallManager      = 0;
+    this.groupCallByClientId    = new LongSparseArray<>();
+    this.peekRequests           = new Requests<>();
+    this.callLinkRequests       = new Requests<>();
+    this.emptyRequests          = new Requests<>();
   }
 
   @Nullable
-  public static CallManager createCallManager(@NonNull Observer observer, @NonNull McuConfig mcuConfig)
+  public static CallManager createCallManager(@NonNull Observer observer, @NonNull McuConfig mcuConfig, @Nullable SSLCertificateVerifier sslCertificateVerifier)
     throws CallException
   {
     Log.i(TAG, "createCallManager():");
     checkInitializeHasBeenCalled();
 
-    CallManager callManager = new CallManager(observer, mcuConfig);
+    CallManager callManager = new CallManager(observer, mcuConfig, sslCertificateVerifier);
 
     long nativeCallManager = ringrtcCreateCallManager(callManager);
     if (nativeCallManager != 0) {
@@ -1356,7 +1361,8 @@ public class CallManager {
                                                               nativeConnectionBorrowed,
                                                               configuration,
                                                               constraints,
-                                                              mcuConfig);
+                                                              mcuConfig,
+                                                              sslCertificateVerifier);
       if (nativePeerConnection == 0) {
         Log.w(TAG, "Unable to create native PeerConnection.");
         return null;
@@ -1874,21 +1880,23 @@ public class CallManager {
       this.iceServers    = iceServers;
       this.hideIp        = hideIp;
 
-      // Create a video track that will be shared across all
-      // connection objects.  It must be disposed manually.
-      if (cameraControl.hasCapturer()) {
-        this.videoSource = factory.createVideoSource(false);
-        // Note: This must stay "video1" to stay in sync with V4 signaling.
-        this.videoTrack  = factory.createVideoTrack("video1", videoSource);
-        videoTrack.setEnabled(false);
+      // Create video source and track that will be shared across all
+      // connection objects. They must be disposed manually.
+      this.videoSource = factory.createVideoSource(false);
+      // Note: This must stay "video1" to stay in sync with V4 signaling.
+      this.videoTrack  = factory.createVideoTrack("video1", videoSource);
+      videoTrack.setEnabled(false);
 
+      Log.i(TAG, "ctor(): cameraControl.hasCapturer() = " + cameraControl.hasCapturer());
+      if (cameraControl.hasCapturer()) {
         // Connect camera as the local video source.
         cameraControl.initCapturer(videoSource.getCapturerObserver());
         videoTrack.addSink(localSink);
-      } else {
-        this.videoSource = null;
-        this.videoTrack  = null;
       }
+      //  else {
+      //   this.videoSource = null;
+      //   this.videoTrack  = null;
+      // }
 
     }
 
@@ -2439,7 +2447,8 @@ public class CallManager {
                                      long                            nativeConnection,
                                      PeerConnection.RTCConfiguration rtcConfig,
                                      MediaConstraints                constraints,
-                                     McuConfig                       mcuConfig)
+                                     McuConfig                       mcuConfig,
+                                     SSLCertificateVerifier          sslCertificateVerifier)
     throws CallException;
 
   private native

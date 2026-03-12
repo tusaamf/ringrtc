@@ -105,6 +105,7 @@ pub fn create_peer_connection(
     jni_rtc_config: JObject,
     jni_media_constraints: JObject,
     jni_mcu_config: JObject,
+    jni_ssl_certificate_verifier: JObject,
 ) -> Result<jlong> {
     const BOOLEAN_TYPE: &str = jni_signature!(boolean);
     const ENABLE_FIELD: &str = "enable";
@@ -145,7 +146,8 @@ pub fn create_peer_connection(
             jni_rtc_config,
             jni_media_constraints,
             pc_observer.into_rffi().into_owned().as_ptr() as jlong,
-            JObject::null(),
+            jni_ssl_certificate_verifier,
+            // JObject::null(),
             // TUNT: add local_demux_id like group call
             // local_demux_id,
         )

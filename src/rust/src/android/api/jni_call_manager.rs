@@ -78,6 +78,7 @@ pub unsafe extern "C" fn Java_org_signal_ringrtc_CallManager_ringrtcCreatePeerCo
     jni_rtc_config: JObject,
     jni_media_constraints: JObject,
     jni_mcu_config: JObject,
+    jni_ssl_certificate_verifier: JObject,
 ) -> jlong {
     match call_manager::create_peer_connection(
         &mut env,
@@ -88,6 +89,7 @@ pub unsafe extern "C" fn Java_org_signal_ringrtc_CallManager_ringrtcCreatePeerCo
         jni_rtc_config,
         jni_media_constraints,
         jni_mcu_config,
+        jni_ssl_certificate_verifier,
     ) {
         Ok(v) => v,
         Err(e) => {
